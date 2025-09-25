@@ -1,0 +1,36 @@
+{
+  "name": "restaurante-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "seed:admin": "node scripts/seed-admin.js",
+    "db:migrate:employee-no": "node scripts/migrate-002-employee-no.js",
+    "db:init": "node scripts/init.js",
+    "seed:users": "node scripts/seed-users.js",
+    "db:migrate:user-fields": "node scripts/migrate-001-add-user-fields.js",
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.1",
+    "nanoid": "^5.1.5",
+    "pg": "^8.16.3",
+    "qrcode": "^1.5.4",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
