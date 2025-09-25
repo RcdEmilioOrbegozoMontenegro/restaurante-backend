@@ -4,6 +4,8 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import routes from "./routes/index.js";
+import { setDefaultResultOrder } from "node:dns";
+setDefaultResultOrder("ipv4first");
 
 const app = express();
 
