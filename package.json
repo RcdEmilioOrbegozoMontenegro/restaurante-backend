@@ -11,7 +11,7 @@
     "seed:users": "node scripts/seed-users.js",
     "db:migrate:user-fields": "node scripts/migrate-001-add-user-fields.js",
     "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
+    "start": "node src/bootstrap.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

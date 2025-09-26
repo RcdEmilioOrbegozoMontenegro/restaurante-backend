@@ -1,8 +1,5 @@
 // src/bootstrap.js
 import { setDefaultResultOrder } from "node:dns";
-
-// Fuerza IPv4 ANTES de cargar cualquier otra cosa
 setDefaultResultOrder("ipv4first");
-console.log("[bootstrap] dns result order set to ipv4first");
-// Arranca tu server real (usa import dinámico para que lo anterior se aplique)
+console.log("[bootstrap] dns result order = ipv4first");
 await import("./server.js");
