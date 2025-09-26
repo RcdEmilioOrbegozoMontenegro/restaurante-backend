@@ -4,56 +4,57 @@ import QRCode from "qrcode";
 
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 
-// POST /qr/generate
-// body: { label?: string, onTimeUntil?: string(ISO o "HH:mm"), expiresAt?: string(ISO) }
+// Normaliza onTimeUntil a "HH:mm" o null
+function normalizeTimeHHmm(input) {
+  if (!input) return null;
+  if (typeof input !== "string") return null;
+
+  const s = input.trim();
+
+  // Caso ideal: ya viene "HH:mm"
+  if (/^\d{2}:\d{2}$/.test(s)) return s;
+
+  // Si viene algo tipo "2025-09-26T09:10" o con zona "...09:10:00.000+00:00"
+  const m = s.match(/T(\d{2}:\d{2})/);
+  if (m) return m[1];
+
+  // Último intento: si es parseable, extrae HH:mm "a lo bruto" (sin zona)
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    // No usaremos zona aquí; si te interesa Lima exacto, pásalo desde el front como "HH:mm"
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+
+  return null;
+}
+
 export async function generateQR(req, res) {
   try {
-    const { label = "Turno", onTimeUntil, expiresAt } = req.body || {};
+    const { label = "Turno", onTimeUntil } = req.body || {};
+    const onTime = normalizeTimeHHmm(onTimeUntil); // ← "HH:mm" | null
+
     const id = nano();
     const token = nano();
 
-    const createdBy = req.user?.sub ?? null;
-
-    // Normaliza on_time_until:
-    // - Si viene "HH:mm", se crea para HOY en hora local.
-    // - Si viene ISO, se usa tal cual.
-    let on_time_until = null;
-    if (typeof onTimeUntil === "string" && onTimeUntil.trim()) {
-      const hhmm = onTimeUntil.trim();
-      if (/^\d{1,2}:\d{2}$/.test(hhmm)) {
-        const [hh, mm] = hhmm.split(":").map((s) => parseInt(s, 10));
-        const d = new Date();
-        d.setHours(hh || 0, mm || 0, 0, 0);
-        on_time_until = d;
-      } else {
-        const d = new Date(onTimeUntil);
-        if (!isNaN(d.getTime())) on_time_until = d;
-      }
-    }
-
-    // Normaliza expires_at si viene
-    let expires_at = null;
-    if (typeof expiresAt === "string" && expiresAt.trim()) {
-      const d = new Date(expiresAt);
-      if (!isNaN(d.getTime())) expires_at = d;
-    }
-
-    // IMPORTANTE: asegúrate de tener columna 'label' en qr_windows si usas label aquí.
+    // Guardamos TIME o NULL; en el cálculo de asistencia usamos COALESCE('09:10'::time)
     await pool.query(
-      `INSERT INTO qr_windows (id, token, label, created_by, created_at, on_time_until, expires_at)
-       VALUES ($1,$2,$3,$4,NOW(),$5,$6)`,
-      [id, token, label, createdBy, on_time_until, expires_at]
+      `INSERT INTO qr_windows (id, token, label, on_time_until)
+       VALUES ($1, $2, $3, $4::time)`,
+      [id, token, label, onTime] // si onTime es null, inserta NULL
     );
 
     const qrImage = await QRCode.toDataURL(token, { margin: 1, width: 256 });
 
     return res.json({
-      ok: true,
       id,
       token,
       label,
-      onTimeUntil: on_time_until ? on_time_until.toISOString() : null,
-      expiresAt: expires_at ? expires_at.toISOString() : null,
+      // Lo que quedó persistido (puede ser null si no enviaste hora)
+      onTimeUntil: onTime,
+      // Para UX puedes mostrar "efectivo": si no hay, tu backend asume '09:10'
+      effectiveOnTimeUntil: onTime || "09:10",
       qrImage,
     });
   } catch (e) {
