@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: restaurante-backend
+    env: node
+    plan: free
+    region: oregon
+    buildCommand: |
+      npm ci
+    startCommand: |
+      npm run db:init && npm run db:migrate:001 && npm run db:migrate:002 && npm run db:seed:admin && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES
+        value: 12h
+      - key: CORS_ORIGIN
+        value: https://https://megalodon-afx7x0gur-ricardoemilio744-gmailcoms-projects.vercel.app,http://localhost:3000
+      - key: ADMIN_EMAIL
+        value: admin@demo.com
+      - key: ADMIN_PASSWORD
+        value: Admin123!
+      - key: ADMIN_FULLNAME
+        value: Administrador
