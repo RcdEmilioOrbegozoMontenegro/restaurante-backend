@@ -5,8 +5,8 @@ import bcrypt from 'bcryptjs';
 
 const nano = customAlphabet('1234567890abcdefghijklmnopqrstuvwxyz', 24);
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@demo.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin123!';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin1@demo.com';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Zxcv123';
 const ADMIN_FULLNAME = process.env.ADMIN_FULLNAME || 'Administrador';
 
 async function main() {
