@@ -2,7 +2,7 @@
 import { pool } from '../src/lib/db.js';
 
 async function main() {
-  // 1) USERS: crear si no existe
+  // ========= USERS =========
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -13,7 +13,6 @@ async function main() {
     );
   `);
 
-  // Asegurar columnas opcionales en USERS (full_name, phone, active)
   await pool.query(`
     DO $$
     BEGIN
@@ -37,10 +36,17 @@ async function main() {
       ) THEN
         ALTER TABLE users ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE;
       END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='users' AND column_name='employee_no'
+      ) THEN
+        ALTER TABLE users ADD COLUMN employee_no BIGINT;
+      END IF;
     END $$;
   `);
 
-  // 2) QR_WINDOWS: crear si no existe (versión mínima)
+  // ========= QR WINDOWS =========
   await pool.query(`
     CREATE TABLE IF NOT EXISTS qr_windows (
       id TEXT PRIMARY KEY,
@@ -48,7 +54,6 @@ async function main() {
     );
   `);
 
-  // Asegurar columnas que pueden faltar en QR_WINDOWS
   await pool.query(`
     DO $$
     BEGIN
@@ -75,7 +80,6 @@ async function main() {
     END $$;
   `);
 
-  // Intentar añadir FK created_by -> users(id) si aún no existe (opcional suave)
   await pool.query(`
     DO $$
     BEGIN
@@ -91,14 +95,12 @@ async function main() {
             ADD CONSTRAINT qr_windows_created_by_fkey
             FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
         EXCEPTION WHEN others THEN
-          -- Si falla por datos existentes, se ignora; no es crítico.
           NULL;
         END;
       END IF;
     END $$;
   `);
 
-  // Índices de QR (solo si existe la columna)
   await pool.query(`
     DO $$
     BEGIN
@@ -118,7 +120,7 @@ async function main() {
     END $$;
   `);
 
-  // 3) ATTENDANCE: crear si no existe (mínimo)
+  // ========= ATTENDANCE =========
   await pool.query(`
     CREATE TABLE IF NOT EXISTS attendance (
       id TEXT PRIMARY KEY,
@@ -128,7 +130,19 @@ async function main() {
     );
   `);
 
-  // Asegurar FK attendance.user_id -> users(id) (opcional suave)
+  // Quita la columna 'day' si quedó de versiones anteriores (para evitar inconsistencias)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='attendance' AND column_name='day'
+      ) THEN
+        ALTER TABLE attendance DROP COLUMN day;
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
     DO $$
     BEGIN
@@ -150,32 +164,42 @@ async function main() {
     END $$;
   `);
 
-  // (Limpieza opcional) elimina índice viejo si existiera (basado en columna 'day')
+  // ---- Limpieza de índices viejos que referencian 'marked_day' o 'day'
   await pool.query(`
     DO $$
+    DECLARE r RECORD;
     BEGIN
-      IF EXISTS (
-        SELECT 1
+      -- Elimina índices cuyo DDL mencione 'marked_day'
+      FOR r IN
+        SELECT indexname
         FROM pg_indexes
-        WHERE schemaname='public' AND indexname='uniq_attendance_user_day'
-      ) THEN
+        WHERE schemaname='public' AND indexdef ILIKE '%marked_day%'
+      LOOP
+        EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
+      END LOOP;
+
+      -- Elimina índices antiguos por nombre
+      IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_day') THEN
         DROP INDEX uniq_attendance_user_day;
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_marked_day') THEN
+        DROP INDEX uniq_attendance_user_marked_day;
       END IF;
     END $$;
   `);
 
-  // Índice para acelerar por usuario
+  // ---- Índices correctos
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);
   `);
 
-  // ✅ Índice ÚNICO por EXPRESIÓN: 1 asistencia por día (día UTC)
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS uniq_attendance_user_day_expr
     ON attendance (user_id, ((marked_at AT TIME ZONE 'UTC')::date));
   `);
 
-  console.log('✅ DB init completed (tablas/columnas/índices asegurados)');
+  console.log('✅ DB init completed (tablas/columnas/índices asegurados y limpieza legacy)');
 }
 
 main()
