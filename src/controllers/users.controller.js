@@ -35,8 +35,9 @@ export async function createWorker(req, res) {
     const exists = await pool.query("SELECT 1 FROM users WHERE email=$1", [
       email.toLowerCase(),
     ]);
-    if (exists.rowCount)
+    if (exists.rowCount) {
       return res.status(409).json({ error: "Email ya registrado" });
+    }
 
     const id = nano();
     const hash = await bcrypt.hash(password, 10);
@@ -83,7 +84,7 @@ export async function listUsers(req, res) {
           SELECT 1
           FROM attendance a
           WHERE a.user_id = u.id
-            AND a.marked_at::date = CURRENT_DATE   -- << aquí
+            AND (a.marked_at AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date
         ) AS "hasMarkedToday"
       FROM users u
       WHERE 1=1
@@ -110,7 +111,6 @@ export async function listUsers(req, res) {
     return res.status(500).json({ error: "error listando usuarios" });
   }
 }
-
 
 // GET /users/export  (ADMIN)  -> CSV
 export async function exportUsersCsv(req, res) {
@@ -150,7 +150,7 @@ export async function exportUsersCsv(req, res) {
         vals
           .map((v) =>
             typeof v === "string" && /[",\n]/.test(v)
-              ? `"${v.replace(/"/g, '""')}"`
+              ? `"${v.replace(/"/g, '""')}"` // escape CSV
               : v
           )
           .join(",")
@@ -234,40 +234,41 @@ export async function getUserAttendance(req, res) {
     return res.status(500).json({ error: "error obteniendo asistencias del usuario" });
   }
 }
+
+// GET /me/attendance?limit=60&from=...&to=...
 export async function getMyAttendance(req, res) {
   try {
-    const userId = req.user?.id
-    if (!userId) return res.status(401).json({ error: "no auth" })
+    const userId = req.user?.sub;
+    if (!userId) return res.status(401).json({ error: "no auth" });
 
-    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 60)))
-    const from = req.query.from?.toString()
-    const to = req.query.to?.toString()
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 60)));
+    const from = req.query.from?.toString();
+    const to = req.query.to?.toString();
 
-    const params = [userId]
+    const params = [userId];
     let sql = `
       SELECT id, marked_at
       FROM attendance
       WHERE user_id = $1
-    `
+    `;
     if (from) {
-      params.push(from)
-      sql += ` AND marked_at::date >= $${params.length}`
+      params.push(from);
+      sql += ` AND marked_at::date >= $${params.length}`;
     }
     if (to) {
-      params.push(to)
-      sql += ` AND marked_at::date <= $${params.length}`
+      params.push(to);
+      sql += ` AND marked_at::date <= $${params.length}`;
     }
-    params.push(limit)
-    sql += ` ORDER BY marked_at DESC LIMIT $${params.length}`
+    params.push(limit);
+    sql += ` ORDER BY marked_at DESC LIMIT $${params.length}`;
 
-    const rs = await pool.query(sql, params)
-    return res.json(rs.rows)
+    const rs = await pool.query(sql, params);
+    return res.json(rs.rows);
   } catch (e) {
-    console.error(e)
-    return res.status(500).json({ error: "error obteniendo mis asistencias" })
+    console.error(e);
+    return res.status(500).json({ error: "error obteniendo mis asistencias" });
   }
 }
-
 
 /* ========= Utils ========= */
 

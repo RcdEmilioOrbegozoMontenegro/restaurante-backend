@@ -21,6 +21,7 @@ r.get("/users/:id/attendance", requireAuth, requireAdmin, getUserAttendance);
 // QR & Attendance
 r.post("/qr/generate", generateQR);                // ← sin el opcional de protegerlo
 r.post("/attendance/mark", requireAuth, markAttendance);
+r.post("/attendance/mark", requireAuth, markAttendance);
 r.get("/me/attendance", requireAuth, getMyAttendance);
 
 export default r;
