@@ -211,21 +211,30 @@ export async function getUserAttendance(req, res) {
 
     const params = [id];
     let sql = `
-      SELECT id, marked_at
-      FROM attendance
-      WHERE user_id = $1`;
+      SELECT
+        a.id,
+        a.marked_at,
+        CASE
+          WHEN w.on_time_until IS NOT NULL AND a.marked_at > w.on_time_until
+            THEN 'tardanza'
+          ELSE 'puntual'
+        END AS status
+      FROM attendance a
+      LEFT JOIN qr_windows w ON w.token = a.qr_token
+      WHERE a.user_id = $1
+    `;
 
     if (from) {
       params.push(from);
-      sql += ` AND marked_at::date >= $${params.length}`;
+      sql += ` AND a.marked_at::date >= $${params.length}`;
     }
     if (to) {
       params.push(to);
-      sql += ` AND marked_at::date <= $${params.length}`;
+      sql += ` AND a.marked_at::date <= $${params.length}`;
     }
 
     params.push(limit);
-    sql += ` ORDER BY marked_at DESC LIMIT $${params.length}`;
+    sql += ` ORDER BY a.marked_at DESC LIMIT $${params.length}`;
 
     const rs = await pool.query(sql, params);
     return res.json(rs.rows);
@@ -247,20 +256,28 @@ export async function getMyAttendance(req, res) {
 
     const params = [userId];
     let sql = `
-      SELECT id, marked_at
-      FROM attendance
-      WHERE user_id = $1
+      SELECT
+        a.id,
+        a.marked_at,
+        CASE
+          WHEN w.on_time_until IS NOT NULL AND a.marked_at > w.on_time_until
+            THEN 'tardanza'
+          ELSE 'puntual'
+        END AS status
+      FROM attendance a
+      LEFT JOIN qr_windows w ON w.token = a.qr_token
+      WHERE a.user_id = $1
     `;
     if (from) {
       params.push(from);
-      sql += ` AND marked_at::date >= $${params.length}`;
+      sql += ` AND a.marked_at::date >= $${params.length}`;
     }
     if (to) {
       params.push(to);
-      sql += ` AND marked_at::date <= $${params.length}`;
+      sql += ` AND a.marked_at::date <= $${params.length}`;
     }
     params.push(limit);
-    sql += ` ORDER BY marked_at DESC LIMIT $${params.length}`;
+    sql += ` ORDER BY a.marked_at DESC LIMIT $${params.length}`;
 
     const rs = await pool.query(sql, params);
     return res.json(rs.rows);

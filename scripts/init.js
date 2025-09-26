@@ -54,6 +54,7 @@ async function main() {
     );
   `);
 
+  // Asegurar columnas en qr_windows (incluye on_time_until)
   await pool.query(`
     DO $$
     BEGIN
@@ -77,9 +78,18 @@ async function main() {
       ) THEN
         ALTER TABLE qr_windows ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
       END IF;
+
+      -- NUEVA: hora máxima para ser "puntual"
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='qr_windows' AND column_name='on_time_until'
+      ) THEN
+        ALTER TABLE qr_windows ADD COLUMN on_time_until TIMESTAMPTZ;
+      END IF;
     END $$;
   `);
 
+  // FK opcional created_by -> users(id)
   await pool.query(`
     DO $$
     BEGIN
@@ -101,6 +111,7 @@ async function main() {
     END $$;
   `);
 
+  // Índices en qr_windows (token, expires_at, on_time_until)
   await pool.query(`
     DO $$
     BEGIN
@@ -117,6 +128,13 @@ async function main() {
       ) THEN
         CREATE INDEX IF NOT EXISTS idx_qr_windows_token ON qr_windows(token);
       END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='qr_windows' AND column_name='on_time_until'
+      ) THEN
+        CREATE INDEX IF NOT EXISTS idx_qr_windows_on_time_until ON qr_windows(on_time_until);
+      END IF;
     END $$;
   `);
 
@@ -130,7 +148,7 @@ async function main() {
     );
   `);
 
-  // Quita la columna 'day' si quedó de versiones anteriores (para evitar inconsistencias)
+  // Quita columna legacy 'day' si existe
   await pool.query(`
     DO $$
     BEGIN
@@ -143,6 +161,7 @@ async function main() {
     END $$;
   `);
 
+  // FK attendance.user_id -> users(id) (suave)
   await pool.query(`
     DO $$
     BEGIN
@@ -164,12 +183,11 @@ async function main() {
     END $$;
   `);
 
-  // ---- Limpieza de índices viejos que referencian 'marked_day' o 'day'
+  // Limpieza de índices legacy que referencian marked_day/day
   await pool.query(`
     DO $$
     DECLARE r RECORD;
     BEGIN
-      -- Elimina índices cuyo DDL mencione 'marked_day'
       FOR r IN
         SELECT indexname
         FROM pg_indexes
@@ -178,28 +196,32 @@ async function main() {
         EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
       END LOOP;
 
-      -- Elimina índices antiguos por nombre
-      IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_day') THEN
+      IF EXISTS (
+        SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_day'
+      ) THEN
         DROP INDEX uniq_attendance_user_day;
       END IF;
 
-      IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_marked_day') THEN
+      IF EXISTS (
+        SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_marked_day'
+      ) THEN
         DROP INDEX uniq_attendance_user_marked_day;
       END IF;
     END $$;
   `);
 
-  // ---- Índices correctos
+  // Índices correctos
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);
   `);
 
+  // 1 asistencia por día (día UTC) con índice único por expresión
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS uniq_attendance_user_day_expr
     ON attendance (user_id, ((marked_at AT TIME ZONE 'UTC')::date));
   `);
 
-  console.log('✅ DB init completed (tablas/columnas/índices asegurados y limpieza legacy)');
+  console.log('✅ DB init completed (tablas/columnas/índices asegurados, on_time_until listo y legacy limpiado)');
 }
 
 main()
