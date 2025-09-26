@@ -1,8 +1,8 @@
 // scripts/init.js
-import { pool } from '../src/lib/db.js';
+import { pool } from "../src/lib/db.js";
 
 async function main() {
-  // ========= USERS =========
+  /* ========= USERS ========= */
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -46,7 +46,7 @@ async function main() {
     END $$;
   `);
 
-  // ========= QR WINDOWS =========
+  /* ========= QR WINDOWS ========= */
   await pool.query(`
     CREATE TABLE IF NOT EXISTS qr_windows (
       id TEXT PRIMARY KEY,
@@ -54,15 +54,15 @@ async function main() {
     );
   `);
 
-  // Asegurar columnas en qr_windows (incluye on_time_until)
+  // Asegurar columnas en qr_windows (label, created_by, created_at, expires_at, on_time_until TIME)
   await pool.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_name='qr_windows' AND column_name='expires_at'
+        WHERE table_name='qr_windows' AND column_name='label'
       ) THEN
-        ALTER TABLE qr_windows ADD COLUMN expires_at TIMESTAMPTZ;
+        ALTER TABLE qr_windows ADD COLUMN label TEXT;
       END IF;
 
       IF NOT EXISTS (
@@ -79,12 +79,51 @@ async function main() {
         ALTER TABLE qr_windows ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
       END IF;
 
-      -- NUEVA: hora máxima para ser "puntual"
       IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_name='qr_windows' AND column_name='on_time_until'
+        WHERE table_name='qr_windows' AND column_name='expires_at'
       ) THEN
-        ALTER TABLE qr_windows ADD COLUMN on_time_until TIMESTAMPTZ;
+        ALTER TABLE qr_windows ADD COLUMN expires_at TIMESTAMPTZ;
+      END IF;
+    END $$;
+  `);
+
+  // Migrar/asegurar on_time_until como TIME (si existía con otro tipo, convertir)
+  await pool.query(`
+    DO $$
+    DECLARE col_type TEXT;
+    BEGIN
+      SELECT data_type
+        INTO col_type
+        FROM information_schema.columns
+       WHERE table_name='qr_windows' AND column_name='on_time_until';
+
+      IF col_type IS NULL THEN
+        -- No existe: crearla como TIME
+        ALTER TABLE qr_windows ADD COLUMN on_time_until TIME;
+      ELSIF col_type <> 'time without time zone' THEN
+        -- Existe pero no es TIME: migrar a TIME de forma segura
+        ALTER TABLE qr_windows ADD COLUMN on_time_until_tmp TIME;
+        -- Intentar convertir preservando la "hora del día" en Lima si era timestamptz/timestamp
+        BEGIN
+          UPDATE qr_windows
+             SET on_time_until_tmp =
+                   CASE
+                     WHEN pg_typeof(on_time_until)::text IN ('timestamp with time zone','timestamptz') THEN
+                       (on_time_until AT TIME ZONE 'America/Lima')::time
+                     WHEN pg_typeof(on_time_until)::text IN ('timestamp without time zone','timestamp') THEN
+                       (on_time_until)::time
+                     WHEN pg_typeof(on_time_until)::text IN ('time without time zone','time') THEN
+                       on_time_until::time
+                     ELSE NULL
+                   END;
+        EXCEPTION WHEN others THEN
+          -- Si algo falla, lo dejamos NULL y se podrá reconfigurar desde el panel
+          NULL;
+        END;
+
+        ALTER TABLE qr_windows DROP COLUMN on_time_until;
+        ALTER TABLE qr_windows RENAME COLUMN on_time_until_tmp TO on_time_until;
       END IF;
     END $$;
   `);
@@ -111,17 +150,10 @@ async function main() {
     END $$;
   `);
 
-  // Índices en qr_windows (token, expires_at, on_time_until)
+  // Índices en qr_windows
   await pool.query(`
     DO $$
     BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name='qr_windows' AND column_name='expires_at'
-      ) THEN
-        CREATE INDEX IF NOT EXISTS idx_qr_windows_expires_at ON qr_windows(expires_at);
-      END IF;
-
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name='qr_windows' AND column_name='token'
@@ -131,14 +163,14 @@ async function main() {
 
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_name='qr_windows' AND column_name='on_time_until'
+        WHERE table_name='qr_windows' AND column_name='expires_at'
       ) THEN
-        CREATE INDEX IF NOT EXISTS idx_qr_windows_on_time_until ON qr_windows(on_time_until);
+        CREATE INDEX IF NOT EXISTS idx_qr_windows_expires_at ON qr_windows(expires_at);
       END IF;
     END $$;
   `);
 
-  // ========= ATTENDANCE =========
+  /* ========= ATTENDANCE ========= */
   await pool.query(`
     CREATE TABLE IF NOT EXISTS attendance (
       id TEXT PRIMARY KEY,
@@ -148,7 +180,7 @@ async function main() {
     );
   `);
 
-  // Quita columna legacy 'day' si existe
+  // Quitar columna legacy 'day' si existe
   await pool.query(`
     DO $$
     BEGIN
@@ -157,6 +189,19 @@ async function main() {
         WHERE table_name='attendance' AND column_name='day'
       ) THEN
         ALTER TABLE attendance DROP COLUMN day;
+      END IF;
+    END $$;
+  `);
+
+  // Asegurar columna status (puntual/tardanza)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='attendance' AND column_name='status'
+      ) THEN
+        ALTER TABLE attendance ADD COLUMN status TEXT;
       END IF;
     END $$;
   `);
@@ -183,7 +228,7 @@ async function main() {
     END $$;
   `);
 
-  // Limpieza de índices legacy que referencian marked_day/day
+  // Limpiar índices legacy (marked_day/day) y el anterior por UTC si existiera
   await pool.query(`
     DO $$
     DECLARE r RECORD;
@@ -196,32 +241,30 @@ async function main() {
         EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
       END LOOP;
 
-      IF EXISTS (
-        SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_day'
-      ) THEN
+      IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_day') THEN
         DROP INDEX uniq_attendance_user_day;
       END IF;
 
-      IF EXISTS (
-        SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_marked_day'
-      ) THEN
+      IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_marked_day') THEN
         DROP INDEX uniq_attendance_user_marked_day;
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='uniq_attendance_user_day_expr') THEN
+        DROP INDEX uniq_attendance_user_day_expr;
       END IF;
     END $$;
   `);
 
   // Índices correctos
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);`);
+
+  // Única asistencia por día (día en America/Lima)
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(user_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_attendance_user_day_lima
+    ON attendance (user_id, ((marked_at AT TIME ZONE 'America/Lima')::date));
   `);
 
-  // 1 asistencia por día (día UTC) con índice único por expresión
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uniq_attendance_user_day_expr
-    ON attendance (user_id, ((marked_at AT TIME ZONE 'UTC')::date));
-  `);
-
-  console.log('✅ DB init completed (tablas/columnas/índices asegurados, on_time_until listo y legacy limpiado)');
+  console.log("✅ DB init completed (tablas/columnas/índices asegurados; on_time_until=TIME; status en attendance; día Lima)");
 }
 
 main()

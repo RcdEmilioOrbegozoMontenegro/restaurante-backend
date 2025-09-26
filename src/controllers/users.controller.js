@@ -82,9 +82,10 @@ export async function listUsers(req, res) {
         u.created_at AS "createdAt",
         EXISTS (
           SELECT 1
-          FROM attendance a
-          WHERE a.user_id = u.id
-            AND (a.marked_at AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date
+            FROM attendance a
+           WHERE a.user_id = u.id
+             AND (a.marked_at AT TIME ZONE 'America/Lima')::date =
+                 (now() AT TIME ZONE 'America/Lima')::date
         ) AS "hasMarkedToday"
       FROM users u
       WHERE 1=1
@@ -210,15 +211,20 @@ export async function getUserAttendance(req, res) {
     const to = req.query.to?.toString();
 
     const params = [id];
+    // Usamos status persistido; si es NULL (filas antiguas), lo calculamos como respaldo
     let sql = `
       SELECT
         a.id,
         a.marked_at,
-        CASE
-          WHEN w.on_time_until IS NOT NULL AND a.marked_at > w.on_time_until
-            THEN 'tardanza'
-          ELSE 'puntual'
-        END AS status
+        COALESCE(
+          a.status,
+          CASE
+            WHEN (a.marked_at AT TIME ZONE 'America/Lima')::time >
+                 COALESCE(w.on_time_until, '09:10'::time)
+              THEN 'tardanza'
+            ELSE 'puntual'
+          END
+        ) AS status
       FROM attendance a
       LEFT JOIN qr_windows w ON w.token = a.qr_token
       WHERE a.user_id = $1
@@ -240,7 +246,9 @@ export async function getUserAttendance(req, res) {
     return res.json(rs.rows);
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: "error obteniendo asistencias del usuario" });
+    return res
+      .status(500)
+      .json({ error: "error obteniendo asistencias del usuario" });
   }
 }
 
@@ -259,11 +267,15 @@ export async function getMyAttendance(req, res) {
       SELECT
         a.id,
         a.marked_at,
-        CASE
-          WHEN w.on_time_until IS NOT NULL AND a.marked_at > w.on_time_until
-            THEN 'tardanza'
-          ELSE 'puntual'
-        END AS status
+        COALESCE(
+          a.status,
+          CASE
+            WHEN (a.marked_at AT TIME ZONE 'America/Lima')::time >
+                 COALESCE(w.on_time_until, '09:10'::time)
+              THEN 'tardanza'
+            ELSE 'puntual'
+          END
+        ) AS status
       FROM attendance a
       LEFT JOIN qr_windows w ON w.token = a.qr_token
       WHERE a.user_id = $1
@@ -283,7 +295,9 @@ export async function getMyAttendance(req, res) {
     return res.json(rs.rows);
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: "error obteniendo mis asistencias" });
+    return res
+      .status(500)
+      .json({ error: "error obteniendo mis asistencias" });
   }
 }
 
