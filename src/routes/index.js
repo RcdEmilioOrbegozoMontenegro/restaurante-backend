@@ -4,7 +4,7 @@ import { markAttendance } from "../controllers/attendance.controller.js";
 import { createWorker, listUsers, exportUsersCsv, deleteUser, getUserAttendance, getMyAttendance } from "../controllers/users.controller.js";
 import { login, loginAdmin } from "../controllers/auth.controller.js";
 import { requireAuth, requireAdmin } from "../middlewares/auth.js";
-
+import { attendanceSummary, attendanceByUser } from "../controllers/reports.controller.js";
 const r = Router();
 
 // Auth
@@ -23,5 +23,8 @@ r.post("/qr/generate", generateQR);                // ← sin el opcional de pro
 r.post("/attendance/mark", requireAuth, markAttendance);
 r.post("/attendance/mark", requireAuth, markAttendance);
 r.get("/me/attendance", requireAuth, getMyAttendance);
+
+r.get("/reports/attendance/summary", requireAuth, requireAdmin, attendanceSummary);
+r.get("/reports/attendance/by-user", requireAuth, requireAdmin, attendanceByUser);
 
 export default r;

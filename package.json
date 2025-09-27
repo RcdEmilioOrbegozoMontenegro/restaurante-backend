@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "seed:admin": "node scripts/seed-admin.js",
+    "seed:dummy-week": "node scripts/seed-dummy-week.js",
     "db:migrate:employee-no": "node scripts/migrate-002-employee-no.js",
     "db:init": "node scripts/init.js",
     "seed:users": "node scripts/seed-users.js",
