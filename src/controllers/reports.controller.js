@@ -1,5 +1,5 @@
 // src/controllers/reports.controller.js
-import { pool } from "../src/lib/db.js";
+import { pool } from "../lib/db.js";
 
 /**
  * GET /reports/attendance/summary?from=2025-09-22&to=2025-09-27
