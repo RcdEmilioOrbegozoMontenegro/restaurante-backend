@@ -82,7 +82,7 @@ export const attendanceByUser = async (req, res, next) => {
       workers AS (
         SELECT
           id,
-          COALESCE(full_name, username, email) AS name,  -- 🔧 aquí el fix
+          COALESCE(full_name, email) AS name,  -- ✅ sin "username"
           email
         FROM users
         WHERE role = 'WORKER' AND (active IS NULL OR active = TRUE)
@@ -119,13 +119,13 @@ export const attendanceByUser = async (req, res, next) => {
       FROM calendar c
       LEFT JOIN att ON att.user_id = c.user_id AND att.day = c.day
       GROUP BY c.user_id, c.name, c.email
-      ORDER BY c.name ASC;
+      ORDER BY c.name ASC NULLS LAST;
     `;
 
     const { rows } = await pool.query(q, [from, to]);
     res.json(rows);
   } catch (err) {
-    console.error("attendanceByUser error:", err); // 🔧 deja el log visible en Render
+    console.error("attendanceByUser error:", err);
     next(err);
   }
 };
