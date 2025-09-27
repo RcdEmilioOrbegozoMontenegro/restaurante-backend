@@ -65,10 +65,6 @@ export const attendanceSummary = async (req, res, next) => {
   }
 };
 
-/**
- * GET /reports/attendance/by-user?from=YYYY-MM-DD&to=YYYY-MM-DD
- * Devuelve, por usuario, conteos de: puntuales, tardanzas y faltas en el rango.
- */
 export const attendanceByUser = async (req, res, next) => {
   try {
     const { from, to } = req.query;
@@ -84,7 +80,10 @@ export const attendanceByUser = async (req, res, next) => {
         FROM generate_series($1::date, $2::date, '1 day') AS d
       ),
       workers AS (
-        SELECT id, name, email
+        SELECT
+          id,
+          COALESCE(full_name, username, email) AS name,  -- 🔧 aquí el fix
+          email
         FROM users
         WHERE role = 'WORKER' AND (active IS NULL OR active = TRUE)
       ),
@@ -107,7 +106,8 @@ export const attendanceByUser = async (req, res, next) => {
           ) AS status
         FROM attendance a
         LEFT JOIN qr_windows qw ON qw.token = a.qr_token
-        WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+        WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date
+              BETWEEN $1::date AND $2::date
       )
       SELECT
         c.user_id,
@@ -125,6 +125,7 @@ export const attendanceByUser = async (req, res, next) => {
     const { rows } = await pool.query(q, [from, to]);
     res.json(rows);
   } catch (err) {
+    console.error("attendanceByUser error:", err); // 🔧 deja el log visible en Render
     next(err);
   }
 };
