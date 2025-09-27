@@ -2,13 +2,14 @@
 import { pool } from "../lib/db.js";
 
 /**
- * GET /reports/attendance/summary?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * GET /reports/attendance/summary?from=YYYY-MM-DD&to=YYYY-MM-DD[&user_id=<id>]
  * Devuelve, por día, conteos de: puntuales, tardanzas y faltas.
  * "Falta" = trabajador WORKER activo sin registro ese día.
+ * Si se envía user_id, filtra por ese empleado.
  */
 export const attendanceSummary = async (req, res, next) => {
   try {
-    const { from, to } = req.query;
+    const { from, to, user_id } = req.query;
     if (!from || !to) {
       return res
         .status(400)
@@ -23,7 +24,9 @@ export const attendanceSummary = async (req, res, next) => {
       workers AS (
         SELECT id
         FROM users
-        WHERE role = 'WORKER' AND (active IS NULL OR active = TRUE)
+        WHERE role = 'WORKER'
+          AND (active IS NULL OR active = TRUE)
+          AND ($3::text IS NULL OR id = $3::text)              -- filtra si viene user_id
       ),
       att AS (
         SELECT
@@ -33,15 +36,15 @@ export const attendanceSummary = async (req, res, next) => {
             a.status,
             CASE
               WHEN ((a.marked_at AT TIME ZONE 'America/Lima')::time)
-                   <= COALESCE(w.on_time_until, '09:10'::time)
+                   <= COALESCE(qw.on_time_until, '09:10'::time)
                 THEN 'puntual'
               ELSE 'tardanza'
             END
           ) AS status
         FROM attendance a
-        LEFT JOIN qr_windows w ON w.token = a.qr_token
-        WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date
-              BETWEEN $1::date AND $2::date
+        LEFT JOIN qr_windows qw ON qw.token = a.qr_token
+        WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+          AND ($3::text IS NULL OR a.user_id = $3::text)        -- eficiencia: también filtra aquí
       )
       SELECT
         d.day,
@@ -49,13 +52,13 @@ export const attendanceSummary = async (req, res, next) => {
         COUNT(*) FILTER (WHERE att.status = 'tardanza') AS tardanzas,
         COUNT(*) FILTER (WHERE att.user_id IS NULL)     AS faltas
       FROM days d
-      CROSS JOIN workers w
-      LEFT JOIN att ON att.user_id = w.id AND att.day = d.day
+      CROSS JOIN workers u
+      LEFT JOIN att ON att.user_id = u.id AND att.day = d.day
       GROUP BY d.day
       ORDER BY d.day ASC;
     `;
 
-    const { rows } = await pool.query(q, [from, to]);
+    const { rows } = await pool.query(q, [from, to, user_id ?? null]);
     res.json(rows);
   } catch (err) {
     next(err);
@@ -97,15 +100,14 @@ export const attendanceByUser = async (req, res, next) => {
             a.status,
             CASE
               WHEN ((a.marked_at AT TIME ZONE 'America/Lima')::time)
-                   <= COALESCE(w.on_time_until, '09:10'::time)
+                   <= COALESCE(qw.on_time_until, '09:10'::time)
                 THEN 'puntual'
               ELSE 'tardanza'
             END
           ) AS status
         FROM attendance a
-        LEFT JOIN qr_windows w ON w.token = a.qr_token
-        WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date
-              BETWEEN $1::date AND $2::date
+        LEFT JOIN qr_windows qw ON qw.token = a.qr_token
+        WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
       )
       SELECT
         c.user_id,
