@@ -1,101 +1,182 @@
 // src/controllers/ai.controller.js
-import rateLimit from "express-rate-limit"
 
-const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini"
-const MAX_TOKENS = Number(process.env.OPENAI_MAX_TOKENS || 400)
+// Si tu runtime es Node 18+ tienes fetch nativo.
+// Si usas una versión anterior, descomenta la siguiente línea e instala node-fetch:
+// const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
-// Palabras guía para “se ve relacionado con gráficos”
-const ALLOWED_HINTS = [
-  "asistencia","tardanza","tardanzas","puntual","puntuales","faltas",
-  "gráfico","gráficos","inventario","categoría","porcentaje",
-  "semana","día","pie","barras","distribución"
-]
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-function isRelated(question = "") {
-  const q = String(question).toLowerCase()
-  return ALLOWED_HINTS.some(h => q.includes(h))
-}
-
-// Límite: 30 req/5min por IP
-export const aiLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-})
+/** ====================== Utilidades ====================== **/
 
 /**
- * POST /ai/chart-qa  (requireAuth + requireAdmin)
- * Body:
- *  - question: string
- *  - attendance: { from?, to?, userId?, activeKeys?, summary?, totalPie? }
- *  - inventory: { data: [{name, value}], description? }
+ * Recorta JSON grande para no exceder tokens.
  */
-export async function chartQA(req, res) {
+function safeJson(obj, maxChars = 18000) {
   try {
-    const { question, attendance, inventory } = req.body || {}
-
-    // Guardia 1: si no parece de gráficos => respuesta controlada
-    if (!question || !isRelated(question)) {
-      return res.json({
-        ok: true,
-        answer: "Solo respondo sobre los gráficos del panel administrador (asistencia e inventario).",
-      })
-    }
-
-    const systemMsg = {
-      role: "system",
-      content:
-        "Eres un analista de datos del panel ADMIN. SOLO puedes hablar sobre: " +
-        "1) 'Asistencias de esta semana' (barras y pie con puntuales, tardanzas, faltas por día/total) " +
-        "y 2) 'Distribución de inventario' (pie por categorías). " +
-        "Si te preguntan algo fuera de eso, responde exactamente: " +
-        "'No puedo ayudarte con eso; solo gráficos del panel administrador.' " +
-        "Responde en español, muy breve y directo, citando métricas del contexto provisto sin inventar valores.",
-    }
-
-    const userMsg = {
-      role: "user",
-      content: [
-        "Pregunta:", String(question),
-        "\n\nContexto asistencia:", JSON.stringify(attendance ?? {}),
-        "\n\nContexto inventario:", JSON.stringify(inventory ?? {}),
-      ].join(" "),
-    }
-
-    const body = {
-      model: MODEL,
-      messages: [systemMsg, userMsg],
-      temperature: 0.2,
-      max_tokens: MAX_TOKENS,
-    }
-
-    const resp = await fetch(OPENAI_API_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    })
-
-    if (!resp.ok) {
-      const text = await resp.text()
-      return res.status(500).json({ ok: false, error: text })
-    }
-
-    const json = await resp.json()
-    const answer = json?.choices?.[0]?.message?.content?.trim() || "No se obtuvo respuesta."
-
-    // Guardia 2: si el modelo se desvió, recortamos
-    const SAFE_PREFIX = "No puedo ayudarte con eso; solo gráficos del panel administrador."
-    const looksSafe = isRelated(answer) || /gráficos del panel administrador/i.test(answer)
-    const safeAnswer = looksSafe ? answer : SAFE_PREFIX
-
-    return res.json({ ok: true, answer: safeAnswer })
-  } catch (err) {
-    console.error("chartQA error:", err)
-    return res.status(500).json({ ok: false, error: "Error interno" })
+    const s = JSON.stringify(obj ?? {}, null, 2);
+    if (s.length <= maxChars) return s;
+    return s.slice(0, maxChars) + "\n/* ...recortado... */";
+  } catch {
+    return "{}";
   }
 }
+
+/**
+ * Pequeño guard de intención: permite preguntas sobre asistencia, empleados, puntualidad, etc.
+ */
+function isAllowedQuestion(q = "") {
+  const EXTENDED_HINTS = [
+    "empleado", "empleados", "trabajador", "trabajadores", "persona", "personal",
+    "asistencia", "asistencias", "tardanza", "tardanzas", "puntual", "puntualidad",
+    "faltó", "faltas", "falta", "quién", "quien", "cuántos", "cuantos", "total",
+    "inventario", "gráfico", "grafico", "barras", "pastel", "pie", "semana", "día", "dia"
+  ];
+  const l = q.toLowerCase();
+  return EXTENDED_HINTS.some(h => l.includes(h));
+}
+
+/**
+ * Llama a la API de OpenAI (chat completions) sin SDK.
+ */
+async function askOpenAI({ messages, model = "gpt-4o-mini", temperature = 0.2 }) {
+  if (!OPENAI_API_KEY) {
+    return { ok: false, answer: "Falta configurar OPENAI_API_KEY en el backend." };
+  }
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      temperature,
+      messages,
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    return { ok: false, answer: `Error del proveedor IA (${resp.status}): ${errText}` };
+  }
+
+  const data = await resp.json();
+  const answer = data?.choices?.[0]?.message?.content?.trim() || "No obtuve respuesta.";
+  return { ok: true, answer };
+}
+
+/**
+ * System prompt orientado a RRHH + panel.
+ */
+function buildSystemMsg() {
+  return {
+    role: "system",
+    content: `
+Eres un analista de recursos humanos y datos operativos.
+Puedes responder sobre:
+1) Asistencia general y diaria de empleados (puntuales, tardanzas, faltas, ausencias).
+2) Información por trabajador (nombre, usuario, correo, estado, métricas de asistencia).
+3) Cantidad total de trabajadores activos/inactivos y resúmenes por periodo.
+4) Interpretación de gráficos del panel (barras, pastel, tendencias) relacionados a asistencia e inventario.
+
+Reglas:
+- Usa EXCLUSIVAMENTE los datos de contexto que te envío (empleados, asistencia, inventario).
+- Si un dato no está en el contexto, dilo claramente y pide el dato faltante.
+- Responde en español, en 1-4 frases claras. Si el usuario pide detalle, puedes extenderte con viñetas.
+- Si piden datos por una persona específica, intenta empatar por nombre o username exacto (con sensibilidad básica a tildes).
+- No inventes cifras. No asumas periodos si no se indican. Indica el rango temporal si está en el contexto.
+`
+  };
+}
+
+/**
+ * Construye el mensaje de usuario incluyendo la pregunta + contexto serializado.
+ */
+function buildUserMsg({ question, attendance, employees, inventory, meta }) {
+  const ctx = [
+    `Pregunta del usuario:\n${question || ""}`,
+    `\n\n--- CONTEXTO DISPONIBLE ---`,
+    `Asistencia (JSON):\n${safeJson(attendance)}`,
+    `\nEmpleados (JSON):\n${safeJson(employees)}`,
+    `\nInventario (JSON):\n${safeJson(inventory)}`,
+  ];
+  if (meta) ctx.push(`\nMeta (JSON):\n${safeJson(meta)}`);
+  return { role: "user", content: ctx.join("\n") };
+}
+
+/** ====================== Controladores ====================== **/
+
+/**
+ * Endpoint existente: preguntas sobre panel/gráficos, ahora extendido a RRHH.
+ * Espera body: { question, attendance?, employees?, inventory?, meta? }
+ */
+async function chartQA(req, res) {
+  try {
+    const { question, attendance, employees, inventory, meta } = req.body || {};
+
+    if (!question || !isAllowedQuestion(question)) {
+      return res.json({
+        ok: true,
+        answer:
+          "Puedo responder sobre asistencias, empleados, puntualidad, tardanzas, ausencias y la interpretación de gráficos del panel.",
+      });
+    }
+
+    const messages = [
+      buildSystemMsg(),
+      buildUserMsg({ question, attendance, employees, inventory, meta }),
+    ];
+
+    const result = await askOpenAI({ messages });
+    return res.json(result);
+  } catch (err) {
+    console.error("chartQA error:", err);
+    return res.status(500).json({
+      ok: false,
+      answer: "Ocurrió un error interno procesando tu consulta.",
+    });
+  }
+}
+
+/**
+ * Nuevo endpoint opcional especializado en RRHH.
+ * Espera body: { question, employees, attendance?, meta? }
+ */
+async function hrQA(req, res) {
+  try {
+    const { question, attendance, employees, meta } = req.body || {};
+
+    if (!question || !isAllowedQuestion(question)) {
+      return res.json({
+        ok: true,
+        answer:
+          "Este endpoint responde preguntas de RRHH: totales de empleados, asistencias, tardanzas y detalles por persona.",
+      });
+    }
+
+    const system = buildSystemMsg();
+    // Refuerza que aquí el foco es RRHH:
+    system.content += `
+- Este endpoint está especializado en RRHH. Prioriza responder con conteos de empleados, estados y métricas por persona.`;
+
+    const messages = [
+      system,
+      buildUserMsg({ question, attendance, employees, inventory: undefined, meta }),
+    ];
+
+    const result = await askOpenAI({ messages });
+    return res.json(result);
+  } catch (err) {
+    console.error("hrQA error:", err);
+    return res.status(500).json({
+      ok: false,
+      answer: "Ocurrió un error interno procesando tu consulta.",
+    });
+  }
+}
+
+module.exports = {
+  chartQA,
+  hrQA,
+};
