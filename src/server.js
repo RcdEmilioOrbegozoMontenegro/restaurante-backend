@@ -4,7 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import routes from "./routes/index.js";
-
+import path from "node:path";
 const app = express();
 
 const allowList = (process.env.CORS_ORIGIN || "")
@@ -30,7 +30,7 @@ const corsMw = cors({
 
 app.use(corsMw);
 app.options(/.*/, corsMw); // <- MUY IMPORTANTE en Express 5 (preflight)
-
+app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
