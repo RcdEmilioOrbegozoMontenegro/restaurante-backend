@@ -20,7 +20,7 @@ import {
   attendanceByUser,
 } from "../controllers/reports.controller.js";
 import { upload, ensureUploadDir } from "../lib/upload.js";
-
+import { chartQA, aiLimiter } from "../controllers/ai.controller.js";
 const r = Router();
 ensureUploadDir(); // crea carpeta de uploads si no existe
 
@@ -61,5 +61,7 @@ r.get("/me/attendance", requireAuth, getMyAttendance);
 // ---------------------------------------------------------------------
 r.get("/reports/attendance/summary", requireAuth, requireAdmin, attendanceSummary);
 r.get("/reports/attendance/by-user", requireAuth, requireAdmin, attendanceByUser);
+// --- AI (ADMIN) --- ⬅️ NUEVO ENDPOINT
+r.post("/ai/chart-qa", requireAuth, requireAdmin, aiLimiter, chartQA);
 
 export default r;
