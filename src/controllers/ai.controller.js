@@ -1,15 +1,12 @@
-// src/controllers/ai.controller.js
-
-// Node 18+ trae fetch nativo. Para Node <18 descomenta la siguiente línea e instala node-fetch.
-// const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+// src/controllers/ai.controller.js  (ESM)
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// ======== Config del "AI Limiter" (ajustable por env) ========
-const AI_LIMITER_ENABLED   = process.env.AI_LIMITER_ENABLED !== "false"; // por defecto ON
+// ======== Config del "AI Limiter" ========
+const AI_LIMITER_ENABLED   = process.env.AI_LIMITER_ENABLED !== "false"; // ON por defecto
 const AI_MAX_INPUT_CHARS   = Number(process.env.AI_MAX_INPUT_CHARS || 18000);
 const AI_RATE_WINDOW_MS    = Number(process.env.AI_RATE_WINDOW_MS || 60_000); // 1 min
-const AI_RATE_LIMIT        = Number(process.env.AI_RATE_LIMIT || 20); // 20 req/min por IP/usuario
+const AI_RATE_LIMIT        = Number(process.env.AI_RATE_LIMIT || 20); // 20 req/min
 const AI_MODEL             = process.env.AI_MODEL || "gpt-4o-mini";
 const AI_TEMPERATURE       = Number(process.env.AI_TEMPERATURE || 0.2);
 const AI_MAX_TOKENS        = Number(process.env.AI_MAX_TOKENS || 400);
@@ -23,7 +20,7 @@ function getClientKey(req) {
     req.ip ||
     req.connection?.remoteAddress ||
     "unknown";
-  const uid = req.user?.id || req.userId || ""; // por si tienes auth middlewares
+  const uid = req.user?.id || req.userId || ""; // si tu auth setea user.id
   return uid ? `u:${uid}` : `ip:${ip}`;
 }
 
@@ -57,9 +54,7 @@ function normalize(str = "") {
     .trim();
 }
 
-/**
- * Recorta JSON grande para no exceder tokens.
- */
+/** Recorta JSON grande para no exceder tokens. */
 function safeJson(obj, maxChars = AI_MAX_INPUT_CHARS) {
   try {
     const s = JSON.stringify(obj ?? {}, null, 2);
@@ -70,13 +65,10 @@ function safeJson(obj, maxChars = AI_MAX_INPUT_CHARS) {
   }
 }
 
-/**
- * Proyección mínima de empleados para evitar datos sensibles y reducir tokens.
- * Ajusta según tus campos disponibles (id, full_name, username, email, active, role, etc.)
- */
+/** Proyección mínima de empleados para reducir tokens. */
 function projectEmployees(employees = []) {
   if (!Array.isArray(employees)) return [];
-  const max = 500; // evita enviar miles al modelo
+  const max = 500;
   return employees.slice(0, max).map((e) => {
     const a = e || {};
     return {
@@ -90,32 +82,23 @@ function projectEmployees(employees = []) {
   });
 }
 
-/**
- * Limita asistencia a lo necesario (resumen por día más totales).
- */
+/** Proyección de asistencia compacta. */
 function projectAttendance(attendance = {}) {
   const a = attendance || {};
-  const out = {
+  return {
     from: a.from ?? null,
     to: a.to ?? null,
     userId: a.userId ?? "ALL",
     activeKeys: a.activeKeys ?? undefined,
-    // summary ya viene en formato compacto (day, puntuales, tardanzas, faltas)
     summary: Array.isArray(a.summary) ? a.summary.slice(0, 366) : [],
     totalPie: Array.isArray(a.totalPie) ? a.totalPie : [],
-    // NO reenviamos la lista completa de workers aquí; va aparte por projectEmployees
   };
-  return out;
 }
 
-/**
- * Guard temático: solo deja pasar temas de asistencia/empleados/gráficos del panel.
- * (Restaurado y más estricto)
- */
+/** Guard temático: solo asistencia/empleados/gráficos. */
 function isAllowedQuestion(q = "") {
   const l = normalize(q).toLowerCase();
 
-  // Tópicos permitidos (ajustables)
   const ALLOWED_HINTS = [
     "empleado", "empleados", "trabajador", "trabajadores", "personal",
     "asistencia", "asistencias", "tardanza", "tardanzas", "puntual", "puntualidad",
@@ -126,29 +109,23 @@ function isAllowedQuestion(q = "") {
   ];
   const allowed = ALLOWED_HINTS.some((h) => l.includes(h));
 
-  // Bloqueos explícitos (credenciales, temas fuera de dominio, etc.)
   const DENY_HINTS = [
     "contraseña", "password", "token", "api key", "apikey", "clave",
     "tarjeta", "cvv", "dni", "dirección", "address",
     "banco", "cuenta", "transferencia",
-    "política", "elección", "presidente", "mitre", "owasp", "osstmm", // evita salirse a temas random
+    "política", "elección", "presidente", "mitre", "owasp", "osstmm",
   ];
   const denied = DENY_HINTS.some((h) => l.includes(h));
 
   return allowed && !denied;
 }
 
-/**
- * Mensaje al usuario cuando el guard bloquea.
- */
 function limiterMessage() {
   return "Solo respondo sobre **asistencia de empleados, puntualidad/tardanzas/faltas** y **gráficos del panel**. " +
-         "Ejemplos: “¿Total de tardanzas esta semana?”, “¿Quién faltó más?”, “Asistencia de Carla del lunes?”.";
+         "Ej.: “¿Total de tardanzas esta semana?”, “¿Quién faltó más?”, “Asistencia de Carla del lunes?”.";
 }
 
-/**
- * Llama a la API de OpenAI (chat completions) sin SDK.
- */
+/** Llama a OpenAI Chat Completions. */
 async function askOpenAI({ messages, model = AI_MODEL, temperature = AI_TEMPERATURE }) {
   if (!OPENAI_API_KEY) {
     return { ok: false, answer: "Falta configurar OPENAI_API_KEY en el backend." };
@@ -165,7 +142,6 @@ async function askOpenAI({ messages, model = AI_MODEL, temperature = AI_TEMPERAT
       temperature,
       max_tokens: AI_MAX_TOKENS,
       messages,
-      // stop: ["</script>", "```"], // opcional si quieres cortar salidas no deseadas
     }),
   });
 
@@ -179,9 +155,7 @@ async function askOpenAI({ messages, model = AI_MODEL, temperature = AI_TEMPERAT
   return { ok: true, answer };
 }
 
-/**
- * System prompt orientado a RRHH + panel, reforzado.
- */
+/** System prompt orientado a RRHH + panel. */
 function buildSystemMsg() {
   return {
     role: "system",
@@ -203,43 +177,55 @@ Reglas:
   };
 }
 
-/**
- * Construye el mensaje de usuario incluyendo la pregunta + contexto minimizado.
- */
+/** Construye el mensaje de usuario con contexto minimizado. */
 function buildUserMsg({ question, attendance, employees, inventory, meta }) {
   const ctx = [
     `Pregunta del usuario:\n${normalize(question || "")}`,
     `\n\n--- CONTEXTO DISPONIBLE ---`,
     `Asistencia (JSON):\n${safeJson(projectAttendance(attendance))}`,
     `\nEmpleados (JSON, minimizado):\n${safeJson(projectEmployees(employees))}`,
-    // inventario no aplica aquí, pero lo dejamos para compatibilidad si algún día se usa:
     `\nInventario (JSON):\n${safeJson(inventory)}`,
   ];
   if (meta) ctx.push(`\nMeta (JSON):\n${safeJson(meta)}`);
   return { role: "user", content: ctx.join("\n") };
 }
 
-// ====================== Controladores ======================
-
-/**
- * Endpoint existente: preguntas sobre panel/gráficos/empleados (con limiter).
- * Espera body: { question, attendance?, employees?, inventory?, meta? }
+/* ===================== MIDDLEWARE: aiLimiter ===================== */
+/** 
+ * Middleware opcional para aplicar rate-limit y guard temático
+ * antes de que llegue al handler (útil si lo encadenas en la ruta).
+ * Si bloquea, responde directamente; si pasa, llama a next().
  */
-async function chartQA(req, res) {
+export function aiLimiter(req, res, next) {
   try {
-    // Rate limit
     const rl = checkRateLimit(req);
     if (!rl.ok) {
       return res.status(429).json({ ok: false, answer: rl.message });
     }
 
-    const { question, attendance, employees, inventory, meta } = req.body || {};
-    const q = normalize(question || "");
+    if (!AI_LIMITER_ENABLED) {
+      return next();
+    }
 
-    // Guard temático
-    if (AI_LIMITER_ENABLED && (!q || !isAllowedQuestion(q))) {
+    const q = normalize((req.body && req.body.question) || "");
+    if (!q || !isAllowedQuestion(q)) {
       return res.json({ ok: true, answer: limiterMessage() });
     }
+
+    return next();
+  } catch (err) {
+    console.error("aiLimiter error:", err);
+    return res.status(500).json({ ok: false, answer: "Error interno en aiLimiter." });
+  }
+}
+
+/* ===================== HANDLERS ===================== */
+
+/** Endpoint: preguntas sobre panel/gráficos/empleados. */
+export async function chartQA(req, res) {
+  try {
+    const { question, attendance, employees, inventory, meta } = req.body || {};
+    const q = normalize(question || "");
 
     const messages = [
       buildSystemMsg(),
@@ -257,29 +243,11 @@ async function chartQA(req, res) {
   }
 }
 
-/**
- * Nuevo endpoint opcional especializado en RRHH (mismo limiter).
- * Espera body: { question, employees, attendance?, meta? }
- */
-async function hrQA(req, res) {
+/** Endpoint especializado en RRHH. */
+export async function hrQA(req, res) {
   try {
-    // Rate limit
-    const rl = checkRateLimit(req);
-    if (!rl.ok) {
-      return res.status(429).json({ ok: false, answer: rl.message });
-    }
-
     const { question, attendance, employees, meta } = req.body || {};
     const q = normalize(question || "");
-
-    if (AI_LIMITER_ENABLED && (!q || !isAllowedQuestion(q))) {
-      return res.json({
-        ok: true,
-        answer:
-          "Este endpoint responde preguntas de RRHH sobre asistencia y empleados. " +
-          "Ej.: “¿Total de empleados activos?”, “Asistencia de [Nombre] esta semana?”.",
-      });
-    }
 
     const system = buildSystemMsg();
     system.content += `
@@ -300,8 +268,3 @@ async function hrQA(req, res) {
     });
   }
 }
-
-module.exports = {
-  chartQA,
-  hrQA,
-};
