@@ -9,9 +9,9 @@ const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 function classifyLateReason(text = "") {
   const t = (text || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
   const rules = [
-    { cat: "Trafico",   rx: /(trafic|atasco|embotell|congestion|bloqueo|paralizad|accident|micro|bus|combi|transporte|huelga)/ },
-    { cat: "Medico",    rx: /(medic|doctor|clinica|hospital|emergenc|cita|salud|dolor|enfermo|farmacia)/ },
-    { cat: "Personal",  rx: /(hijo|famil|colegi|tramite|document|hogar|mudanza|imprevist|casa|visita)/ },
+    { cat: "Trafico",  score: 90, rx: /(trafic|atasco|embotell|congestion|bloqueo|paralizad|accident|micro|bus|combi|transporte|huelga)/ },
+    { cat: "Medico",   score: 90, rx: /(medic|doctor|clinica|hospital|emergenc|cita|salud|dolor|enfermo|farmacia)/ },
+    { cat: "Personal", score: 80, rx: /(hijo|famil|colegi|tramite|document|hogar|mudanza|imprevist|casa|visita)/ },
   ];
   for (const r of rules) if (r.rx.test(t)) return { category: r.cat, score: r.score };
   return { category: "otros", score: 50 };
