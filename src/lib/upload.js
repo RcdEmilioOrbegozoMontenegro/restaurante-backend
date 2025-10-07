@@ -5,6 +5,9 @@ import multer from "multer";
 import { customAlphabet } from "nanoid";
 
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
+const nanoMenu = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
+
+const UPLOAD_MENU_ROOT = path.resolve(process.cwd(), "uploads", "menu");
 
 // Carpeta local para dev
 const UPLOAD_ROOT = path.resolve(process.cwd(), "uploads", "attendance");
@@ -23,7 +26,19 @@ export const upload = multer({
     cb(ok ? null : new Error("Tipo de imagen no permitido"));
   },
 });
+export function ensureMenuUploadDir() {
+  fs.mkdirSync(UPLOAD_MENU_ROOT, { recursive: true });
+}
 
+export function saveMenuBuffer(buffer, ext = ".jpg") {
+  ensureMenuUploadDir();
+  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+  const fileName = `${nanoMenu()}${ext}`;
+  const full = path.join(UPLOAD_MENU_ROOT, fileName);
+  fs.writeFileSync(full, buffer);
+  // Asumiendo que ya sirves /uploads estático; si no, agrega static en server.js
+  return { publicUrl: `/uploads/menu/${fileName}`, sha256 };
+}
 export function savePhotoBuffer(buffer, ext = ".jpg") {
   const id = nano();
   const y = new Date().getUTCFullYear();

@@ -21,6 +21,10 @@ import {
 } from "../controllers/reports.controller.js";
 import { upload, ensureUploadDir } from "../lib/upload.js";
 import { chartQA, aiLimiter,hrQA } from "../controllers/ai.controller.js";
+import {
+  listCategories, createCategory, updateCategory, deleteCategory,
+  listItems, createItem, updateItem, deleteItem,
+} from "../controllers/menu.controller.js";
 const r = Router();
 ensureUploadDir(); // crea carpeta de uploads si no existe
 
@@ -64,5 +68,20 @@ r.get("/reports/attendance/by-user", requireAuth, requireAdmin, attendanceByUser
 // --- AI (ADMIN) --- ⬅️ NUEVO ENDPOINT
 r.post("/ai/chart-qa", requireAuth, requireAdmin, aiLimiter, chartQA);
 r.post("/hr-qa", hrQA);
+
+
+// ----- Público (listar menú) -----
+r.get("/menu/categories", listCategories);
+r.get("/menu/items", listItems);
+
+// ----- Admin (CRUD) -----
+r.post("/menu/categories", requireAuth, requireAdmin, createCategory);
+r.patch("/menu/categories/:id", requireAuth, requireAdmin, updateCategory);
+r.delete("/menu/categories/:id", requireAuth, requireAdmin, deleteCategory);
+
+r.post("/menu/items", requireAuth, requireAdmin, upload.single("image"), createItem);
+r.patch("/menu/items/:id", requireAuth, requireAdmin, upload.single("image"), updateItem);
+r.delete("/menu/items/:id", requireAuth, requireAdmin, deleteItem);
+
 
 export default r;
