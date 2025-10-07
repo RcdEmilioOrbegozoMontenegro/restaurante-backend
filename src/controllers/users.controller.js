@@ -224,7 +224,10 @@ export async function getUserAttendance(req, res) {
               THEN 'tardanza'
             ELSE 'puntual'
           END
-        ) AS status
+        ) AS status,
+        a.late_reason_category,
+        a.late_reason_text,
+        a.late_reason_score
       FROM attendance a
       LEFT JOIN qr_windows w ON w.token = a.qr_token
       WHERE a.user_id = $1
@@ -251,6 +254,7 @@ export async function getUserAttendance(req, res) {
       .json({ error: "error obteniendo asistencias del usuario" });
   }
 }
+
 
 // GET /me/attendance?limit=60&from=...&to=...
 export async function getMyAttendance(req, res) {

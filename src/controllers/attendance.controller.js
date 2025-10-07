@@ -5,6 +5,18 @@ import { savePhotoBuffer } from "../lib/upload.js";
 
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 
+/** Clasificación simple de justificación por palabras clave */
+function classifyLateReason(text = "") {
+  const t = (text || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+  const rules = [
+    { cat: "trafico",  score: 90, rx: /(trafic|atasco|embotell|congestion|bloqueo|paralizad|accident|micro|bus|combi|transporte|huelga)/ },
+    { cat: "medico",   score: 90, rx: /(medic|doctor|clinica|hospital|emergenc|cita|salud|dolor|enfermo|farmacia)/ },
+    { cat: "personal", score: 80, rx: /(hijo|famil|colegi|tramite|document|hogar|mudanza|imprevist|casa|visita)/ },
+  ];
+  for (const r of rules) if (r.rx.test(t)) return { category: r.cat, score: r.score };
+  return { category: "otros", score: 50 };
+}
+
 /** Utilidad: valida QR y expiración; retorna fila de qr_windows o null */
 async function getValidQRWindowOrFail(qrToken) {
   const win = await pool.query(
@@ -38,12 +50,27 @@ async function hasAttendanceToday(userId) {
   return dup.rowCount > 0;
 }
 
+/** Utilidad: determina si AHORA sería tardanza para un token dado */
+async function willBeLate(qrToken) {
+  const q = await pool.query(
+    `SELECT (now() AT TIME ZONE 'America/Lima')::time >
+            COALESCE(on_time_until, '09:10'::time) AS is_late
+       FROM qr_windows
+      WHERE token = $1
+      LIMIT 1`,
+    [qrToken]
+  );
+  if (!q.rowCount) return null; // token inválido
+  return !!q.rows[0].is_late;
+}
+
 // ---------------------------------------------------------------------------
 // POST /attendance/mark  (requireAuth)  -- SIN FOTO (compatibilidad)
+// Body: { qrToken, lateReasonText? }
 // ---------------------------------------------------------------------------
 export async function markAttendance(req, res) {
   try {
-    const { qrToken } = req.body || {};
+    const { qrToken, lateReasonText } = req.body || {};
     if (!qrToken) return res.status(400).json({ error: "qrToken requerido" });
 
     const userId = req.user?.sub;
@@ -56,10 +83,30 @@ export async function markAttendance(req, res) {
       return res.status(409).json({ error: "Asistencia ya registrada hoy" });
     }
 
+    // ¿será tardanza?
+    const isLate = await willBeLate(qrToken);
+    if (isLate === null) return res.status(400).json({ error: "QR no válido" });
+
+    // Si es tardanza, exigir justificación
+    let lateReasonCategory = null, lateReasonScore = null;
+    if (isLate) {
+      if (!lateReasonText || !lateReasonText.trim()) {
+        return res.status(400).json({
+          error: "Justificación requerida para tardanza",
+          requireJustification: true,
+        });
+      }
+      const cls = classifyLateReason(lateReasonText);
+      lateReasonCategory = cls.category;
+      lateReasonScore = cls.score;
+    }
+
     const id = nano();
     const ins = await pool.query(
       `
-      INSERT INTO attendance (id, user_id, qr_token, status)
+      INSERT INTO attendance
+        (id, user_id, qr_token, status,
+         late_reason_text, late_reason_category, late_reason_score)
       SELECT
         $1, $2, $3,
         CASE
@@ -67,12 +114,13 @@ export async function markAttendance(req, res) {
                COALESCE(w.on_time_until, '09:10'::time)
           THEN 'tardanza'
           ELSE 'puntual'
-        END
+        END,
+        $4, $5, $6
         FROM qr_windows w
        WHERE w.token = $3
       RETURNING marked_at, status
       `,
-      [id, userId, qrToken]
+      [id, userId, qrToken, lateReasonText || null, lateReasonCategory, lateReasonScore]
     );
 
     if (ins.rowCount === 0) {
@@ -96,11 +144,11 @@ export async function markAttendance(req, res) {
 
 // ---------------------------------------------------------------------------
 // POST /attendance/mark-with-photo  (requireAuth, multipart/form-data)
-// Campos: photo (archivo), qrToken (texto)
+// Campos: photo (archivo), qrToken (texto), lateReasonText? (texto)
 // ---------------------------------------------------------------------------
 export async function markAttendanceWithPhoto(req, res) {
   try {
-    const { qrToken } = req.body || {};
+    const { qrToken, lateReasonText } = req.body || {};
     const file = req.file; // provisto por multer.single("photo")
 
     if (!qrToken) return res.status(400).json({ error: "qrToken requerido" });
@@ -114,6 +162,23 @@ export async function markAttendanceWithPhoto(req, res) {
 
     if (await hasAttendanceToday(userId)) {
       return res.status(409).json({ error: "Asistencia ya registrada hoy" });
+    }
+
+    // ¿será tardanza?
+    const isLate = await willBeLate(qrToken);
+    if (isLate === null) return res.status(400).json({ error: "QR no válido" });
+
+    let lateReasonCategory = null, lateReasonScore = null;
+    if (isLate) {
+      if (!lateReasonText || !lateReasonText.trim()) {
+        return res.status(400).json({
+          error: "Justificación requerida para tardanza",
+          requireJustification: true,
+        });
+      }
+      const cls = classifyLateReason(lateReasonText);
+      lateReasonCategory = cls.category;
+      lateReasonScore = cls.score;
     }
 
     // Guardado de foto y hash
@@ -139,11 +204,14 @@ export async function markAttendanceWithPhoto(req, res) {
       return res.status(400).json({ error: "Foto ya utilizada hoy" });
     }
 
-    // Inserción con cálculo de puntual/tardanza
+    // Inserción con cálculo de puntual/tardanza + foto + justificación
     const id = nano();
     const ins = await pool.query(
       `
-      INSERT INTO attendance (id, user_id, qr_token, status, photo_url, photo_sha256, photo_taken_at)
+      INSERT INTO attendance
+        (id, user_id, qr_token, status,
+         photo_url, photo_sha256, photo_taken_at,
+         late_reason_text, late_reason_category, late_reason_score)
       SELECT
         $1, $2, $3,
         CASE
@@ -152,12 +220,17 @@ export async function markAttendanceWithPhoto(req, res) {
           THEN 'tardanza'
           ELSE 'puntual'
         END,
-        $4, $5, now()
+        $4, $5, now(),
+        $6, $7, $8
         FROM qr_windows w
        WHERE w.token = $3
       RETURNING marked_at, status, photo_url
       `,
-      [id, userId, qrToken, publicUrl, sha256]
+      [
+        id, userId, qrToken,
+        publicUrl, sha256,
+        lateReasonText || null, lateReasonCategory, lateReasonScore
+      ]
     );
 
     if (ins.rowCount === 0) {
