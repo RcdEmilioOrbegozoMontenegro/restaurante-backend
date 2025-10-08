@@ -6,8 +6,13 @@ import { saveMenuBuffer } from "../lib/upload.js";
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 
 function slugify(s = "") {
-  return String(s).toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu,"")
-    .replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,60) || "cat";
+  return String(s)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "cat";
 }
 
 /* ================= CATEGORÍAS ================= */
@@ -31,11 +36,14 @@ export async function createCategory(req, res) {
   const slug = slugify(name);
   const order = Number.isFinite(+sortOrder) ? +sortOrder : 100;
   try {
-    const rs = await pool.query(`
+    const rs = await pool.query(
+      `
       INSERT INTO menu_categories (id, name, slug, sort_order)
       VALUES ($1,$2,$3,$4)
       RETURNING id, name, slug, sort_order AS "sortOrder", created_at AS "createdAt"
-    `, [id, String(name).trim(), slug, order]);
+    `,
+      [id, String(name).trim(), slug, order]
+    );
     res.status(201).json(rs.rows[0]);
   } catch (e) {
     if (e && String(e.message || "").includes("unique") && String(e.message).includes("slug")) {
@@ -53,13 +61,21 @@ export async function updateCategory(req, res) {
 
   const fields = [];
   const params = [];
-  if (name) { params.push(String(name).trim()); fields.push(`name=$${params.length}`); }
-  if (name) { params.push(slugify(name)); fields.push(`slug=$${params.length}`); }
-  if (sortOrder != null) { params.push(+sortOrder); fields.push(`sort_order=$${params.length}`); }
+  if (name) {
+    params.push(String(name).trim());
+    fields.push(`name=$${params.length}`);
+    params.push(slugify(name));
+    fields.push(`slug=$${params.length}`);
+  }
+  if (sortOrder != null) {
+    params.push(+sortOrder);
+    fields.push(`sort_order=$${params.length}`);
+  }
   if (fields.length === 0) return res.status(400).json({ error: "Nada para actualizar" });
 
   params.push(id);
-  const sql = `UPDATE menu_categories SET ${fields.join(",")} WHERE id=$${params.length}
+  const sql = `UPDATE menu_categories SET ${fields.join(",")}
+               WHERE id=$${params.length}
                RETURNING id, name, slug, sort_order AS "sortOrder", created_at AS "createdAt"`;
 
   try {
@@ -99,8 +115,14 @@ export async function listItems(req, res) {
     LEFT JOIN menu_categories c ON c.id = i.category_id
     WHERE 1=1
   `;
-  if (category_id) { params.push(category_id); sql += ` AND i.category_id=$${params.length}`; }
-  if (q) { params.push(`%${q}%`); sql += ` AND (i.name ILIKE $${params.length})`; }
+  if (category_id) {
+    params.push(category_id);
+    sql += ` AND i.category_id=$${params.length}`;
+  }
+  if (q) {
+    params.push(`%${q}%`);
+    sql += ` AND (i.name ILIKE $${params.length})`;
+  }
   sql += ` ORDER BY i.sort_order ASC, i.created_at DESC LIMIT 500`;
   const rs = await pool.query(sql, params);
   res.json(rs.rows);
@@ -115,12 +137,13 @@ export async function createItem(req, res) {
   // Imagen opcional vía multer.single("image")
   const file = req.file;
   let imageUrl = null;
-  if (file) {
+  if (file?.buffer) {
     const ext =
       file.mimetype === "image/png" ? ".png" :
-      file.mimetype === "image/webp" ? ".webp" : ".jpg";
+      file.mimetype === "image/webp" ? ".webp" :
+      ".jpg"; // default jpeg
     const saved = saveMenuBuffer(file.buffer, ext);
-    imageUrl = saved.publicUrl;
+    imageUrl = saved.publicUrl; // p.ej. /uploads/menu/xxx.png (SIN /api)
   }
 
   const id = nano();
@@ -135,13 +158,16 @@ export async function createItem(req, res) {
   ];
 
   try {
-    const rs = await pool.query(`
+    const rs = await pool.query(
+      `
       INSERT INTO menu_items (id, category_id, name, price, image_url, active, sort_order)
       VALUES ($1,$2,$3,$4,$5,$6,$7)
       RETURNING id, name, price::float AS price, image_url AS "imageUrl",
                 active, sort_order AS "sortOrder", created_at AS "createdAt",
                 category_id AS "categoryId"
-    `, params);
+    `,
+      params
+    );
     res.status(201).json(rs.rows[0]);
   } catch (e) {
     console.error(e);
@@ -159,20 +185,35 @@ export async function updateItem(req, res) {
   const fields = [];
   const params = [];
 
-  if (name) { params.push(String(name).trim()); fields.push(`name=$${params.length}`); }
-  if (price != null && Number.isFinite(+price)) {
-    params.push(+(+price).toFixed(2)); fields.push(`price=$${params.length}`);
+  if (name) {
+    params.push(String(name).trim());
+    fields.push(`name=$${params.length}`);
   }
-  if (categoryId !== undefined) { params.push(categoryId || null); fields.push(`category_id=$${params.length}`); }
-  if (sortOrder != null) { params.push(+sortOrder); fields.push(`sort_order=$${params.length}`); }
-  if (active != null) { params.push(!!active); fields.push(`active=$${params.length}`); }
+  if (price != null && Number.isFinite(+price)) {
+    params.push(+(+price).toFixed(2));
+    fields.push(`price=$${params.length}`);
+  }
+  if (categoryId !== undefined) {
+    params.push(categoryId || null);
+    fields.push(`category_id=$${params.length}`);
+  }
+  if (sortOrder != null) {
+    params.push(+sortOrder);
+    fields.push(`sort_order=$${params.length}`);
+  }
+  if (active != null) {
+    params.push(!!active);
+    fields.push(`active=$${params.length}`);
+  }
 
-  if (file) {
+  if (file?.buffer) {
     const ext =
       file.mimetype === "image/png" ? ".png" :
-      file.mimetype === "image/webp" ? ".webp" : ".jpg";
+      file.mimetype === "image/webp" ? ".webp" :
+      ".jpg";
     const saved = saveMenuBuffer(file.buffer, ext);
-    params.push(saved.publicUrl); fields.push(`image_url=$${params.length}`);
+    params.push(saved.publicUrl);
+    fields.push(`image_url=$${params.length}`);
   }
 
   if (fields.length === 0) return res.status(400).json({ error: "Nada para actualizar" });
@@ -181,7 +222,7 @@ export async function updateItem(req, res) {
   const sql = `UPDATE menu_items SET ${fields.join(",")}
                WHERE id=$${params.length}
                RETURNING id, name, price::float AS price, image_url AS "imageUrl",
-                         active, sort_order AS "sortOrder", created_at AS "createdAt",
+                         active, sort_order AS "sortOrder", created_at AS "CreatedAt",
                          category_id AS "categoryId"`;
   try {
     const rs = await pool.query(sql, params);

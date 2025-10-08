@@ -30,7 +30,10 @@ const corsMw = cors({
 
 app.use(corsMw);
 app.options(/.*/, corsMw); // <- MUY IMPORTANTE en Express 5 (preflight)
-app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads"), {
+  maxAge: "7d",
+  index: false,
+}));
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
