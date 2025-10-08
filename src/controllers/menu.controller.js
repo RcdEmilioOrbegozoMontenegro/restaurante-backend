@@ -23,7 +23,6 @@ export async function listCategories(_req, res) {
     FROM menu_categories
     ORDER BY sort_order ASC, created_at ASC
   `);
-  // "Todos" es virtual desde el front
   res.json(rs.rows);
 }
 
@@ -108,9 +107,22 @@ export async function listItems(req, res) {
   const params = [];
   let sql = `
     SELECT
-      i.id, i.name, i.price::float AS price, i.image_url AS "imageUrl",
-      i.active, i.sort_order AS "sortOrder", i.created_at AS "createdAt",
-      c.id AS "categoryId", c.name AS "categoryName", c.slug AS "categorySlug"
+      i.id,
+      i.name,
+      i.price::float AS price,
+      -- ✅ Sanitiza image_url: solo http(s) o /uploads; corrige /api/uploads; invalida lo demás
+      CASE
+        WHEN i.image_url ~* '^https?://'     THEN i.image_url
+        WHEN i.image_url ~* '^/api/uploads/' THEN regexp_replace(i.image_url, '^/api', '', 'i')
+        WHEN i.image_url ~* '^/uploads/'     THEN i.image_url
+        ELSE NULL
+      END AS "imageUrl",
+      i.active,
+      i.sort_order AS "sortOrder",
+      i.created_at AS "createdAt",
+      c.id   AS "categoryId",
+      c.name AS "categoryName",
+      c.slug AS "categorySlug"
     FROM menu_items i
     LEFT JOIN menu_categories c ON c.id = i.category_id
     WHERE 1=1
@@ -143,7 +155,7 @@ export async function createItem(req, res) {
       file.mimetype === "image/webp" ? ".webp" :
       ".jpg"; // default jpeg
     const saved = saveMenuBuffer(file.buffer, ext);
-    imageUrl = saved.publicUrl; // p.ej. /uploads/menu/xxx.png (SIN /api)
+    imageUrl = saved.publicUrl; // /uploads/menu/xxx.png (SIN /api)
   }
 
   const id = nano();
@@ -222,7 +234,7 @@ export async function updateItem(req, res) {
   const sql = `UPDATE menu_items SET ${fields.join(",")}
                WHERE id=$${params.length}
                RETURNING id, name, price::float AS price, image_url AS "imageUrl",
-                         active, sort_order AS "sortOrder", created_at AS "CreatedAt",
+                         active, sort_order AS "sortOrder", created_at AS "createdAt",
                          category_id AS "categoryId"`;
   try {
     const rs = await pool.query(sql, params);
