@@ -5,6 +5,8 @@
   "main": "src/server.js",
   "type": "module",
   "scripts": {
+    "migrate:menu-fix-images": "node scripts/migrate-005-fix-menu-image-urls.js",
+    "migrate:menu-add-category": "node scripts/migrate-004-add-menu-category.js",
     "seed:admin": "node scripts/seed-admin.js",
     "seed:dummy-week": "node scripts/seed-dummy-week.js",
     "db:migrate:employee-no": "node scripts/migrate-002-employee-no.js",
