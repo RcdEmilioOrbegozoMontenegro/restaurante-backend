@@ -137,7 +137,7 @@ export const attendanceByUser = async (req, res, next) => {
 // ✅ Distribución de razones para el gráfico de pie
 export const reasonsSummary = async (req, res, next) => {
   try {
-    const { from, to } = req.query || {};
+    const { from, to, user_id } = req.query || {};
     if (!from || !to) {
       return res.status(400).json({ error: "from y to requeridos (YYYY-MM-DD)" });
     }
@@ -149,16 +149,18 @@ export const reasonsSummary = async (req, res, next) => {
       FROM attendance a
       WHERE a.late_reason_category IS NOT NULL
         AND (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+        AND ($3::text IS NULL OR a.user_id = $3::text)
       GROUP BY 1
       ORDER BY 2 DESC, 1 ASC
     `;
-    const { rows } = await pool.query(q, [from, to]);
+    const { rows } = await pool.query(q, [from, to, user_id ?? null]);
     const total = rows.reduce((n, r) => n + Number(r.count || 0), 0);
     res.json({ from, to, total, breakdown: rows });
   } catch (err) {
     next(err);
   }
 };
+
 
 // ✅ Export CSV con razón (categoría) y justificación (texto) + resumen al final
 export const exportAttendanceCsv = async (req, res, next) => {
