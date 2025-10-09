@@ -9,7 +9,7 @@ import fs from "node:fs";
 
 const app = express();
 
-/* ==== CORS allowlist (coma-separado en .env) ==== */
+/* CORS */
 const allowList = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
@@ -17,11 +17,11 @@ const allowList = (process.env.CORS_ORIGIN || "")
 
 const corsMw = cors({
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // Postman/CLI/SSR
-    if (allowList.includes(origin)) return cb(null, true); // ej http://localhost:3000
+    if (!origin) return cb(null, true);
+    if (allowList.includes(origin)) return cb(null, true);
     try {
       const u = new URL(origin);
-      if (u.hostname.endsWith(".vercel.app")) return cb(null, true); // front en Vercel
+      if (u.hostname.endsWith(".vercel.app")) return cb(null, true);
     } catch {}
     return cb(new Error(`CORS blocked: ${origin}`));
   },
@@ -32,36 +32,32 @@ const corsMw = cors({
 });
 
 app.use(corsMw);
-app.options(/.*/, corsMw); // preflight en Express 5
+app.options(/.*/, corsMw);
 
-/* ==== aseguramos carpetas de estáticos ==== */
+/* Static uploads (+ compat /api/uploads) */
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-const UPLOADS_MENU_DIR = path.join(UPLOADS_DIR, "menu");
-fs.mkdirSync(UPLOADS_MENU_DIR, { recursive: true });
+fs.mkdirSync(path.join(UPLOADS_DIR, "menu"), { recursive: true });
 
-/* ==== estáticos y seguridad ==== */
-app.use("/uploads", express.static(UPLOADS_DIR)); // sirve /uploads/**
-app.use("/api/uploads", express.static(UPLOADS_DIR)); // 👈 compat con filas antiguas
+app.use("/uploads", express.static(UPLOADS_DIR));
+app.use("/api/uploads", express.static(UPLOADS_DIR)); // compat con filas antiguas
+
+/* Seguridad / parsers / logs */
 app.use(
   helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" }, // permitir <img src> cross-origin
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
   })
 );
-
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* ==== health ==== */
+/* Health */
 app.get("/", (_req, res) => res.send("API OK"));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-/* ==== rutas API ==== */
-app.use("/api", routes); // monta tus rutas aquí, una sola vez
+/* API */
+app.use("/api", routes);
 
-/* ==== arranque ==== */
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`API on :${PORT}`);
-});
+app.listen(PORT, "0.0.0.0", () => console.log(`API on :${PORT}`));

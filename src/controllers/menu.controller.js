@@ -2,12 +2,11 @@
 import path from "node:path";
 import { pool } from "../lib/db.js";
 import { customAlphabet } from "nanoid";
-import { saveMenuBuffer } from "../lib/upload.js"; // opcional si usas memoryStorage
+import { saveMenuBuffer } from "../lib/upload.js";
 
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 
-/* ================= helpers ================= */
-
+/* Helpers */
 function slugify(s = "") {
   return (
     String(s)
@@ -20,24 +19,20 @@ function slugify(s = "") {
   );
 }
 
-/** Devuelve una URL pública tipo /uploads/menu/xxx.ext a partir del file de multer.
- * Soporta tanto memoryStorage (file.buffer) como diskStorage (file.path/filename). */
+/** Devuelve /uploads/menu/xxx.ext desde el file de multer (buffer o disco). */
 function publicUrlFromMulterFile(file) {
   if (!file) return null;
 
-  // 1) memoryStorage → delega a tu helper existente
+  // memoryStorage -> usar helper que escribe el buffer
   if (file.buffer) {
     const ext =
-      file.mimetype === "image/png"
-        ? ".png"
-        : file.mimetype === "image/webp"
-        ? ".webp"
-        : ".jpg";
-    const saved = saveMenuBuffer(file.buffer, ext); // debe guardar en uploads/menu/*
-    return saved?.publicUrl ?? null; // ej "/uploads/menu/abc123.jpg"
+      file.mimetype === "image/png" ? ".png" :
+      file.mimetype === "image/webp" ? ".webp" : ".jpg";
+    const saved = saveMenuBuffer(file.buffer, ext);
+    return saved?.publicUrl ?? null;
   }
 
-  // 2) diskStorage → multer ya guardó el archivo físicamente
+  // diskStorage -> multer ya creó el archivo en uploads/menu
   if (file.path || file.filename) {
     const filename = file.filename || path.basename(file.path);
     return `/uploads/menu/${filename}`;
@@ -76,14 +71,8 @@ export async function createCategory(req, res) {
     );
     res.status(201).json(rs.rows[0]);
   } catch (e) {
-    if (
-      e &&
-      String(e.message || "").includes("unique") &&
-      String(e.message).includes("slug")
-    ) {
-      return res
-        .status(409)
-        .json({ error: "Ya existe una categoría con un nombre similar" });
+    if (e && String(e.message || "").includes("unique") && String(e.message).includes("slug")) {
+      return res.status(409).json({ error: "Ya existe una categoría con un nombre similar" });
     }
     console.error(e);
     res.status(500).json({ error: "error creando categoría" });
@@ -107,8 +96,7 @@ export async function updateCategory(req, res) {
     params.push(+sortOrder);
     fields.push(`sort_order=$${params.length}`);
   }
-  if (fields.length === 0)
-    return res.status(400).json({ error: "Nada para actualizar" });
+  if (fields.length === 0) return res.status(400).json({ error: "Nada para actualizar" });
 
   params.push(id);
   const sql = `UPDATE menu_categories SET ${fields.join(",")}
@@ -117,8 +105,7 @@ export async function updateCategory(req, res) {
 
   try {
     const rs = await pool.query(sql, params);
-    if (!rs.rowCount)
-      return res.status(404).json({ error: "Categoría no encontrada" });
+    if (!rs.rowCount) return res.status(404).json({ error: "Categoría no encontrada" });
     res.json(rs.rows[0]);
   } catch (e) {
     console.error(e);
@@ -130,12 +117,8 @@ export async function deleteCategory(req, res) {
   const { id } = req.params || {};
   if (!id) return res.status(400).json({ error: "id requerido" });
   try {
-    const del = await pool.query(
-      `DELETE FROM menu_categories WHERE id=$1 RETURNING id`,
-      [id]
-    );
-    if (!del.rowCount)
-      return res.status(404).json({ error: "Categoría no encontrada" });
+    const del = await pool.query(`DELETE FROM menu_categories WHERE id=$1 RETURNING id`, [id]);
+    if (!del.rowCount) return res.status(404).json({ error: "Categoría no encontrada" });
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -153,7 +136,6 @@ export async function listItems(req, res) {
       i.id,
       i.name,
       i.price::float AS price,
-      -- Sanitiza image_url: http(s) o /uploads; corrige /api/uploads; invalida lo demás
       CASE
         WHEN i.image_url ~* '^https?://'     THEN i.image_url
         WHEN i.image_url ~* '^/api/uploads/' THEN regexp_replace(i.image_url, '^/api', '', 'i')
@@ -184,7 +166,6 @@ export async function listItems(req, res) {
 }
 
 export async function createItem(req, res) {
-  // acepta category_id o categoryId
   const body = req.body || {};
   const name = body.name;
   const price = body.price;
@@ -193,14 +174,10 @@ export async function createItem(req, res) {
   const active = body.active;
 
   if (!name || !Number.isFinite(+price)) {
-    return res
-      .status(400)
-      .json({ error: "Nombre y precio son requeridos" });
+    return res.status(400).json({ error: "Nombre y precio son requeridos" });
   }
 
-  // Imagen (buffer o disco)
-  const file = req.file;
-  const imageUrl = publicUrlFromMulterFile(file); // -> /uploads/menu/xxx.ext
+  const imageUrl = publicUrlFromMulterFile(req.file); // ← ahora funciona con disk o memory
 
   const id = nano();
   const params = [
@@ -221,7 +198,7 @@ export async function createItem(req, res) {
       RETURNING id, name, price::float AS price, image_url AS "imageUrl",
                 active, sort_order AS "sortOrder", created_at AS "createdAt",
                 category_id AS "categoryId"
-    `,
+      `,
       params
     );
     res.status(201).json(rs.rows[0]);
@@ -242,53 +219,29 @@ export async function updateItem(req, res) {
   const sortOrder = body.sortOrder;
   const active = body.active;
 
-  const file = req.file;
-
   const fields = [];
   const params = [];
 
-  if (name) {
-    params.push(String(name).trim());
-    fields.push(`name=$${params.length}`);
-  }
-  if (price != null && Number.isFinite(+price)) {
-    params.push(+(+price).toFixed(2));
-    fields.push(`price=$${params.length}`);
-  }
-  if (categoryId !== undefined) {
-    params.push(categoryId || null);
-    fields.push(`category_id=$${params.length}`);
-  }
-  if (sortOrder != null) {
-    params.push(+sortOrder);
-    fields.push(`sort_order=$${params.length}`);
-  }
-  if (active != null) {
-    params.push(!!active);
-    fields.push(`active=$${params.length}`);
-  }
+  if (name) { params.push(String(name).trim()); fields.push(`name=$${params.length}`); }
+  if (price != null && Number.isFinite(+price)) { params.push(+(+price).toFixed(2)); fields.push(`price=$${params.length}`); }
+  if (categoryId !== undefined) { params.push(categoryId || null); fields.push(`category_id=$${params.length}`); }
+  if (sortOrder != null) { params.push(+sortOrder); fields.push(`sort_order=$${params.length}`); }
+  if (active != null) { params.push(!!active); fields.push(`active=$${params.length}`); }
 
-  // Imagen (buffer o disco)
-  const imageUrl = publicUrlFromMulterFile(file);
-  if (imageUrl) {
-    params.push(imageUrl);
-    fields.push(`image_url=$${params.length}`);
-  }
+  const imageUrl = publicUrlFromMulterFile(req.file);
+  if (imageUrl) { params.push(imageUrl); fields.push(`image_url=$${params.length}`); }
 
-  if (fields.length === 0)
-    return res.status(400).json({ error: "Nada para actualizar" });
+  if (fields.length === 0) return res.status(400).json({ error: "Nada para actualizar" });
 
   params.push(id);
   const sql = `UPDATE menu_items SET ${fields.join(",")}
                WHERE id=$${params.length}
                RETURNING id, name, price::float AS price, image_url AS "imageUrl",
-                         active, sort_order AS "sortOrder", created_at AS "CreatedAt",
+                         active, sort_order AS "sortOrder", created_at AS "createdAt",
                          category_id AS "categoryId"`;
-
   try {
     const rs = await pool.query(sql, params);
-    if (!rs.rowCount)
-      return res.status(404).json({ error: "Ítem no encontrado" });
+    if (!rs.rowCount) return res.status(404).json({ error: "Ítem no encontrado" });
     res.json(rs.rows[0]);
   } catch (e) {
     console.error(e);
@@ -300,12 +253,8 @@ export async function deleteItem(req, res) {
   const { id } = req.params || {};
   if (!id) return res.status(400).json({ error: "id requerido" });
   try {
-    const del = await pool.query(
-      `DELETE FROM menu_items WHERE id=$1 RETURNING id`,
-      [id]
-    );
-    if (!del.rowCount)
-      return res.status(404).json({ error: "Ítem no encontrado" });
+    const del = await pool.query(`DELETE FROM menu_items WHERE id=$1 RETURNING id`, [id]);
+    if (!del.rowCount) return res.status(404).json({ error: "Ítem no encontrado" });
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
