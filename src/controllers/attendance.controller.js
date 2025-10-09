@@ -6,16 +6,51 @@ import { savePhotoBuffer } from "../lib/upload.js";
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 
 /** Clasificación simple de justificación por palabras clave */
+/** Clasifica la justificación en categorías usadas por los gráficos */
 function classifyLateReason(text = "") {
-  const t = (text || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+  const t = String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, ""); // sin tildes
+
+  // De más específico a más general
   const rules = [
-    { cat: "Trafico",  score: 90, rx: /(trafic|atasco|embotell|congestion|bloqueo|paralizad|accident|micro|bus|combi|transporte|huelga)/ },
-    { cat: "Medico",   score: 90, rx: /(medic|doctor|clinica|hospital|emergenc|cita|salud|dolor|enfermo|farmacia)/ },
-    { cat: "Personal", score: 80, rx: /(hijo|famil|colegi|tramite|document|hogar|mudanza|imprevist|casa|visita)/ },
+    {
+      cat: "Tráfico",
+      score: 95,
+      rx: /(trafic|atasc|embotell|congestion|choque|accident|bloque|paraliz|desvio)/,
+    },
+    {
+      cat: "Transporte",
+      score: 92,
+      rx: /(bus|micro|combi|colectivo|metro|tren|mototaxi|taxi|paradero|transporte|vehicul|auto)/,
+    },
+    {
+      cat: "Salud",
+      score: 92,
+      rx: /(salud|medic|doctor|doctora|cita|clinica|hospital|fiebre|dolor|enferm|farmaci|odont|dental|analisis|prueba|psicolog|terapia)/,
+    },
+    {
+      cat: "Documentos",
+      score: 90,
+      rx: /(tramite|tramites|document|dni|reniec|notari|banco|sunat|licencia|certific|constancia|registro|pago)/,
+    },
+    {
+      cat: "Permiso",
+      score: 88,
+      rx: /(permiso|autoriz|me autoriz|licencia laboral)/,
+    },
+    {
+      cat: "Familiar",
+      score: 88,
+      rx: /(hijo|hija|famil|mama|papa|abuela|abuelo|esposa|esposo|pareja|colegi|escuela|jardin|guarderia|velorio|funeral|emergencia familiar)/,
+    },
   ];
+
   for (const r of rules) if (r.rx.test(t)) return { category: r.cat, score: r.score };
-  return { category: "otros", score: 50 };
+  return { category: "Otros", score: 50 };
 }
+
 
 /** Utilidad: valida QR y expiración; retorna fila de qr_windows o null */
 async function getValidQRWindowOrFail(qrToken) {
