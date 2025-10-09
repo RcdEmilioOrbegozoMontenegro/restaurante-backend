@@ -41,7 +41,7 @@ fs.mkdirSync(UPLOADS_MENU_DIR, { recursive: true });
 
 /* ==== estáticos y seguridad ==== */
 app.use("/uploads", express.static(UPLOADS_DIR)); // sirve /uploads/**
-
+app.use("/api/uploads", express.static(UPLOADS_DIR)); // 👈 compat con filas antiguas
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" }, // permitir <img src> cross-origin
