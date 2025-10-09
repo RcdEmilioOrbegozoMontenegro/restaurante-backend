@@ -1,18 +1,49 @@
 // src/controllers/menu.controller.js
+import path from "node:path";
 import { pool } from "../lib/db.js";
 import { customAlphabet } from "nanoid";
-import { saveMenuBuffer } from "../lib/upload.js";
+import { saveMenuBuffer } from "../lib/upload.js"; // opcional si usas memoryStorage
 
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 
+/* ================= helpers ================= */
+
 function slugify(s = "") {
-  return String(s)
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60) || "cat";
+  return (
+    String(s)
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "cat"
+  );
+}
+
+/** Devuelve una URL pública tipo /uploads/menu/xxx.ext a partir del file de multer.
+ * Soporta tanto memoryStorage (file.buffer) como diskStorage (file.path/filename). */
+function publicUrlFromMulterFile(file) {
+  if (!file) return null;
+
+  // 1) memoryStorage → delega a tu helper existente
+  if (file.buffer) {
+    const ext =
+      file.mimetype === "image/png"
+        ? ".png"
+        : file.mimetype === "image/webp"
+        ? ".webp"
+        : ".jpg";
+    const saved = saveMenuBuffer(file.buffer, ext); // debe guardar en uploads/menu/*
+    return saved?.publicUrl ?? null; // ej "/uploads/menu/abc123.jpg"
+  }
+
+  // 2) diskStorage → multer ya guardó el archivo físicamente
+  if (file.path || file.filename) {
+    const filename = file.filename || path.basename(file.path);
+    return `/uploads/menu/${filename}`;
+  }
+
+  return null;
 }
 
 /* ================= CATEGORÍAS ================= */
@@ -45,8 +76,14 @@ export async function createCategory(req, res) {
     );
     res.status(201).json(rs.rows[0]);
   } catch (e) {
-    if (e && String(e.message || "").includes("unique") && String(e.message).includes("slug")) {
-      return res.status(409).json({ error: "Ya existe una categoría con un nombre similar" });
+    if (
+      e &&
+      String(e.message || "").includes("unique") &&
+      String(e.message).includes("slug")
+    ) {
+      return res
+        .status(409)
+        .json({ error: "Ya existe una categoría con un nombre similar" });
     }
     console.error(e);
     res.status(500).json({ error: "error creando categoría" });
@@ -70,7 +107,8 @@ export async function updateCategory(req, res) {
     params.push(+sortOrder);
     fields.push(`sort_order=$${params.length}`);
   }
-  if (fields.length === 0) return res.status(400).json({ error: "Nada para actualizar" });
+  if (fields.length === 0)
+    return res.status(400).json({ error: "Nada para actualizar" });
 
   params.push(id);
   const sql = `UPDATE menu_categories SET ${fields.join(",")}
@@ -79,7 +117,8 @@ export async function updateCategory(req, res) {
 
   try {
     const rs = await pool.query(sql, params);
-    if (!rs.rowCount) return res.status(404).json({ error: "Categoría no encontrada" });
+    if (!rs.rowCount)
+      return res.status(404).json({ error: "Categoría no encontrada" });
     res.json(rs.rows[0]);
   } catch (e) {
     console.error(e);
@@ -91,8 +130,12 @@ export async function deleteCategory(req, res) {
   const { id } = req.params || {};
   if (!id) return res.status(400).json({ error: "id requerido" });
   try {
-    const del = await pool.query(`DELETE FROM menu_categories WHERE id=$1 RETURNING id`, [id]);
-    if (!del.rowCount) return res.status(404).json({ error: "Categoría no encontrada" });
+    const del = await pool.query(
+      `DELETE FROM menu_categories WHERE id=$1 RETURNING id`,
+      [id]
+    );
+    if (!del.rowCount)
+      return res.status(404).json({ error: "Categoría no encontrada" });
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -110,7 +153,7 @@ export async function listItems(req, res) {
       i.id,
       i.name,
       i.price::float AS price,
-      -- ✅ Sanitiza image_url: solo http(s) o /uploads; corrige /api/uploads; invalida lo demás
+      -- Sanitiza image_url: http(s) o /uploads; corrige /api/uploads; invalida lo demás
       CASE
         WHEN i.image_url ~* '^https?://'     THEN i.image_url
         WHEN i.image_url ~* '^/api/uploads/' THEN regexp_replace(i.image_url, '^/api', '', 'i')
@@ -120,7 +163,7 @@ export async function listItems(req, res) {
       i.active,
       i.sort_order AS "sortOrder",
       i.created_at AS "createdAt",
-      c.id   AS "categoryId",
+      i.category_id AS "categoryId",
       c.name AS "categoryName",
       c.slug AS "categorySlug"
     FROM menu_items i
@@ -141,22 +184,23 @@ export async function listItems(req, res) {
 }
 
 export async function createItem(req, res) {
-  const { name, price, categoryId, sortOrder, active } = req.body || {};
+  // acepta category_id o categoryId
+  const body = req.body || {};
+  const name = body.name;
+  const price = body.price;
+  const categoryId = body.category_id ?? body.categoryId ?? null;
+  const sortOrder = body.sortOrder;
+  const active = body.active;
+
   if (!name || !Number.isFinite(+price)) {
-    return res.status(400).json({ error: "Nombre y precio son requeridos" });
+    return res
+      .status(400)
+      .json({ error: "Nombre y precio son requeridos" });
   }
 
-  // Imagen opcional vía multer.single("image")
+  // Imagen (buffer o disco)
   const file = req.file;
-  let imageUrl = null;
-  if (file?.buffer) {
-    const ext =
-      file.mimetype === "image/png" ? ".png" :
-      file.mimetype === "image/webp" ? ".webp" :
-      ".jpg"; // default jpeg
-    const saved = saveMenuBuffer(file.buffer, ext);
-    imageUrl = saved.publicUrl; // /uploads/menu/xxx.png (SIN /api)
-  }
+  const imageUrl = publicUrlFromMulterFile(file); // -> /uploads/menu/xxx.ext
 
   const id = nano();
   const params = [
@@ -191,7 +235,13 @@ export async function updateItem(req, res) {
   const { id } = req.params || {};
   if (!id) return res.status(400).json({ error: "id requerido" });
 
-  const { name, price, categoryId, sortOrder, active } = req.body || {};
+  const body = req.body || {};
+  const name = body.name;
+  const price = body.price;
+  const categoryId = body.category_id ?? body.categoryId;
+  const sortOrder = body.sortOrder;
+  const active = body.active;
+
   const file = req.file;
 
   const fields = [];
@@ -218,27 +268,27 @@ export async function updateItem(req, res) {
     fields.push(`active=$${params.length}`);
   }
 
-  if (file?.buffer) {
-    const ext =
-      file.mimetype === "image/png" ? ".png" :
-      file.mimetype === "image/webp" ? ".webp" :
-      ".jpg";
-    const saved = saveMenuBuffer(file.buffer, ext);
-    params.push(saved.publicUrl);
+  // Imagen (buffer o disco)
+  const imageUrl = publicUrlFromMulterFile(file);
+  if (imageUrl) {
+    params.push(imageUrl);
     fields.push(`image_url=$${params.length}`);
   }
 
-  if (fields.length === 0) return res.status(400).json({ error: "Nada para actualizar" });
+  if (fields.length === 0)
+    return res.status(400).json({ error: "Nada para actualizar" });
 
   params.push(id);
   const sql = `UPDATE menu_items SET ${fields.join(",")}
                WHERE id=$${params.length}
                RETURNING id, name, price::float AS price, image_url AS "imageUrl",
-                         active, sort_order AS "sortOrder", created_at AS "createdAt",
+                         active, sort_order AS "sortOrder", created_at AS "CreatedAt",
                          category_id AS "categoryId"`;
+
   try {
     const rs = await pool.query(sql, params);
-    if (!rs.rowCount) return res.status(404).json({ error: "Ítem no encontrado" });
+    if (!rs.rowCount)
+      return res.status(404).json({ error: "Ítem no encontrado" });
     res.json(rs.rows[0]);
   } catch (e) {
     console.error(e);
@@ -250,8 +300,12 @@ export async function deleteItem(req, res) {
   const { id } = req.params || {};
   if (!id) return res.status(400).json({ error: "id requerido" });
   try {
-    const del = await pool.query(`DELETE FROM menu_items WHERE id=$1 RETURNING id`, [id]);
-    if (!del.rowCount) return res.status(404).json({ error: "Ítem no encontrado" });
+    const del = await pool.query(
+      `DELETE FROM menu_items WHERE id=$1 RETURNING id`,
+      [id]
+    );
+    if (!del.rowCount)
+      return res.status(404).json({ error: "Ítem no encontrado" });
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
