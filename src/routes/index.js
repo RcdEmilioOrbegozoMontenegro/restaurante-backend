@@ -1,4 +1,3 @@
-// src/routes/index.js
 import { Router } from "express";
 import { generateQR } from "../controllers/qr.controller.js";
 import {
@@ -18,13 +17,16 @@ import { requireAuth, requireAdmin } from "../middlewares/auth.js";
 import {
   attendanceSummary,
   attendanceByUser,
+  reasonsSummary,        // 👈 NUEVO
+  exportAttendanceCsv,   // 👈 NUEVO
 } from "../controllers/reports.controller.js";
 import { upload, ensureUploadDir } from "../lib/upload.js";
-import { chartQA, aiLimiter,hrQA } from "../controllers/ai.controller.js";
+import { chartQA, aiLimiter, hrQA } from "../controllers/ai.controller.js";
 import {
   listCategories, createCategory, updateCategory, deleteCategory,
   listItems, createItem, updateItem, deleteItem,
 } from "../controllers/menu.controller.js";
+
 const r = Router();
 ensureUploadDir(); // crea carpeta de uploads si no existe
 
@@ -65,10 +67,14 @@ r.get("/me/attendance", requireAuth, getMyAttendance);
 // ---------------------------------------------------------------------
 r.get("/reports/attendance/summary", requireAuth, requireAdmin, attendanceSummary);
 r.get("/reports/attendance/by-user", requireAuth, requireAdmin, attendanceByUser);
-// --- AI (ADMIN) --- ⬅️ NUEVO ENDPOINT
+
+// 👇 NUEVOS ENDPOINTS
+r.get("/reports/attendance/reasons", requireAuth, requireAdmin, reasonsSummary);
+r.get("/reports/attendance/export",  requireAuth, requireAdmin, exportAttendanceCsv);
+
+// --- AI (ADMIN) ---
 r.post("/ai/chart-qa", requireAuth, requireAdmin, aiLimiter, chartQA);
 r.post("/hr-qa", hrQA);
-
 
 // ----- Público (listar menú) -----
 r.get("/menu/categories", listCategories);
@@ -82,6 +88,5 @@ r.delete("/menu/categories/:id", requireAuth, requireAdmin, deleteCategory);
 r.post("/menu/items", requireAuth, requireAdmin, upload.single("image"), createItem);
 r.patch("/menu/items/:id", requireAuth, requireAdmin, upload.single("image"), updateItem);
 r.delete("/menu/items/:id", requireAuth, requireAdmin, deleteItem);
-
 
 export default r;
