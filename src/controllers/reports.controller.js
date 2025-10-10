@@ -170,12 +170,12 @@ export const exportAttendanceCsv = async (req, res, next) => {
       return res.status(400).json({ error: "from y to requeridos (YYYY-MM-DD)" });
     }
 
-    // Detalle por registro (usa marked_at)
+    // Detalle por registro (igual que antes)
     const detailQ = `
       SELECT
-        (a.marked_at AT TIME ZONE 'America/Lima')::date                          AS date,
-        to_char(a.marked_at AT TIME ZONE 'America/Lima', 'HH24:MI')              AS time,
-        COALESCE(u.full_name, u.email)                                           AS worker,
+        (a.marked_at AT TIME ZONE 'America/Lima')::date AS date,
+        to_char(a.marked_at AT TIME ZONE 'America/Lima', 'HH24:MI') AS time,
+        COALESCE(u.full_name, u.email) AS worker,
         COALESCE(
           a.status,
           CASE
@@ -184,18 +184,19 @@ export const exportAttendanceCsv = async (req, res, next) => {
             THEN 'puntual'
             ELSE 'tardanza'
           END
-        )                                                                        AS status,
-        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón')          AS reason_category,
-        COALESCE(a.late_reason_text, '')                                         AS reason_text
+        ) AS status,
+        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS reason_category,
+        COALESCE(a.late_reason_text, '') AS reason_text
       FROM attendance a
       JOIN users u ON u.id = a.user_id
       LEFT JOIN qr_windows qw ON qw.token = a.qr_token
-      WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+      WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date
+            BETWEEN $1::date AND $2::date
       ORDER BY 1 ASC, 3 ASC
     `;
     const detail = await pool.query(detailQ, [from, to]);
 
-    // Resumen por categoría (usa late_reason_category)
+    // Resumen por categoría (igual que antes)
     const sumQ = `
       SELECT
         COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS category,
@@ -208,7 +209,19 @@ export const exportAttendanceCsv = async (req, res, next) => {
     `;
     const summary = await pool.query(sumQ, [from, to]);
 
-    // CSV
+    // NUEVO: bloque de justificaciones completas (solo las que tienen texto)
+    const justQ = `
+      SELECT
+        (a.marked_at AT TIME ZONE 'America/Lima')::date AS date,
+        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS category,
+        a.late_reason_text AS text
+      FROM attendance a
+      WHERE a.late_reason_text IS NOT NULL AND a.late_reason_text <> ''
+        AND (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+      ORDER BY 1 ASC
+    `;
+    const just = await pool.query(justQ, [from, to]);
+
     const header = [
       "Fecha",
       "Hora",
@@ -221,10 +234,13 @@ export const exportAttendanceCsv = async (req, res, next) => {
     const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 
     const lines = [header.join(",")];
+
+    // detalle
     for (const r of detail.rows) {
+      const fecha = new Date(r.date).toLocaleDateString("es-PE", { timeZone: "America/Lima" }); // dd/mm/aaaa
       lines.push(
         [
-          r.date,
+          fecha,
           r.time || "",
           escapeCsv(r.worker),
           r.status,
@@ -234,12 +250,35 @@ export const exportAttendanceCsv = async (req, res, next) => {
       );
     }
 
-    // Bloque de resumen debajo
+    // resumen
     lines.push("");
     lines.push(`Resumen de razones (${from} a ${to})`);
     lines.push("Categoría,Conteo");
     for (const s of summary.rows) {
       lines.push([escapeCsv(s.category), s.count].join(","));
+    }
+
+    // NUEVO: justificaciones completas al final
+    lines.push("");
+    lines.push(`Justificaciones completas (${from} a ${to})`);
+    lines.push("Fecha,Día,Categoría,Justificación");
+    for (const j of just.rows) {
+      const d = new Date(j.date);
+      const fecha = d.toLocaleDateString("es-PE", { timeZone: "America/Lima" }); // 09/10/2025
+      const dia = new Intl.DateTimeFormat("es-PE", { weekday: "long", timeZone: "America/Lima" })
+        .format(d)
+        .replace(/^\w/, (c) => c.toUpperCase()); // Lunes, Martes...
+      lines.push(
+        [
+          fecha,
+          escapeCsv(dia),
+          escapeCsv(j.category || "Sin razón"),
+          escapeCsv(j.text || ""),
+        ].join(",")
+      );
+      // Si lo quieres en un solo campo tipo: 09/10/2025 Lunes - Tráfico - "texto"
+      // usa en su lugar:
+      // lines.push(escapeCsv(`${fecha} ${dia} - ${j.category || "Sin razón"} - "${(j.text || "").replace(/"/g,'""')}"`));
     }
 
     const csv = lines.join("\n");
@@ -253,3 +292,4 @@ export const exportAttendanceCsv = async (req, res, next) => {
     next(err);
   }
 };
+
