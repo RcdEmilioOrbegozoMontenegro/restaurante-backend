@@ -15,6 +15,7 @@ import {
 import { login, loginAdmin } from "../controllers/auth.controller.js";
 import { requireAuth, requireAdmin } from "../middlewares/auth.js";
 import {
+  reasonsDetail,
   attendanceSummary,
   attendanceByUser,
   reasonsSummary,
@@ -52,6 +53,7 @@ r.get("/reports/attendance/summary", requireAuth, requireAdmin, attendanceSummar
 r.get("/reports/attendance/by-user", requireAuth, requireAdmin, attendanceByUser);
 r.get("/reports/attendance/reasons", requireAuth, requireAdmin, reasonsSummary);
 r.get("/reports/attendance/export", requireAuth, requireAdmin, exportAttendanceCsv);
+r.get("/reports/attendance/reasons/detail", requireAuth, requireAdmin, reasonsDetail);
 
 // AI (ADMIN)
 r.post("/ai/chart-qa", requireAuth, requireAdmin, aiLimiter, chartQA);

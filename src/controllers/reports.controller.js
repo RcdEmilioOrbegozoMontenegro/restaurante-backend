@@ -285,3 +285,42 @@ export const exportAttendanceCsv = async (req, res, next) => {
     next(err);
   }
 };
+export const reasonsDetail = async (req, res, next) => {
+  try {
+    const { from, to, user_id } = req.query || {};
+    if (!from || !to) {
+      return res.status(400).json({ error: "from y to requeridos (YYYY-MM-DD)" });
+    }
+
+    const sql = `
+      SELECT
+        (a.marked_at AT TIME ZONE 'America/Lima')::date AS day_date,
+        EXTRACT(DOW FROM (a.marked_at AT TIME ZONE 'America/Lima'))::int AS dow,
+        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS category,
+        COALESCE(a.late_reason_text, '') AS text,
+        COALESCE(u.full_name, u.email) AS worker
+      FROM attendance a
+      JOIN users u ON u.id = a.user_id
+      WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+        AND a.status = 'tardanza'
+        AND a.late_reason_text IS NOT NULL
+        AND a.late_reason_text <> ''
+        AND ($3::text IS NULL OR a.user_id = $3::text)
+      ORDER BY day_date ASC, worker ASC
+    `;
+    const { rows } = await pool.query(sql, [from, to, user_id ?? null]);
+
+    const dias = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+    const data = rows.map(r => ({
+      dateISO: r.day_date, // 2025-10-09
+      dateDMY: new Date(r.day_date).toLocaleDateString("es-PE", { timeZone: "America/Lima" }), // 09/10/2025
+      weekday: dias[r.dow] ?? "",
+      category: r.category,
+      text: r.text,
+      worker: r.worker,
+    }));
+    res.json({ from, to, items: data });
+  } catch (err) {
+    next(err);
+  }
+};
