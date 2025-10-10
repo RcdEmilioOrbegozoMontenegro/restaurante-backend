@@ -162,134 +162,126 @@ export const reasonsSummary = async (req, res, next) => {
 };
 
 
-// ✅ Export CSV con razón (categoría) y justificación (texto) + resumen al final
 export const exportAttendanceCsv = async (req, res, next) => {
   try {
-    const { from, to } = req.query || {};
+    const { from, to, user_id } = req.query;
     if (!from || !to) {
-      return res.status(400).json({ error: "from y to requeridos (YYYY-MM-DD)" });
+      return res.status(400).json({ message: "from y to son requeridos (YYYY-MM-DD)" });
     }
 
-    // Detalle por registro (igual que antes)
-    const detailQ = `
+    const summarySql = `
+      WITH days AS (
+        SELECT d::date AS day
+        FROM generate_series($1::date, $2::date, '1 day') AS d
+      ),
+      workers AS (
+        SELECT id
+        FROM users
+        WHERE role = 'WORKER'
+          AND (active IS NULL OR active = TRUE)
+          AND ($3::text IS NULL OR id = $3::text)
+      ),
+      att AS (
+        SELECT
+          a.user_id,
+          (a.marked_at AT TIME ZONE 'America/Lima')::date AS day,
+          COALESCE(
+            a.status,
+            CASE
+              WHEN ((a.marked_at AT TIME ZONE 'America/Lima')::time)
+                   <= COALESCE(qw.on_time_until, '09:10'::time)
+                THEN 'puntual'
+              ELSE 'tardanza'
+            END
+          ) AS status
+        FROM attendance a
+        LEFT JOIN qr_windows qw ON qw.token = a.qr_token
+        WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+          AND ($3::text IS NULL OR a.user_id = $3::text)
+      )
       SELECT
-        (a.marked_at AT TIME ZONE 'America/Lima')::date AS date,
-        to_char(a.marked_at AT TIME ZONE 'America/Lima', 'HH24:MI') AS time,
-        COALESCE(u.full_name, u.email) AS worker,
-        COALESCE(
-          a.status,
-          CASE
-            WHEN ((a.marked_at AT TIME ZONE 'America/Lima')::time)
-                 <= COALESCE(qw.on_time_until, '09:10'::time)
-            THEN 'puntual'
-            ELSE 'tardanza'
-          END
-        ) AS status,
-        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS reason_category,
-        COALESCE(a.late_reason_text, '') AS reason_text
+        d.day::date AS day,
+        COUNT(*) FILTER (WHERE att.status = 'puntual')  AS puntuales,
+        COUNT(*) FILTER (WHERE att.status = 'tardanza') AS tardanzas,
+        COUNT(*) FILTER (WHERE att.user_id IS NULL)     AS faltas
+      FROM days d
+      CROSS JOIN workers u
+      LEFT JOIN att ON att.user_id = u.id AND att.day = d.day
+      GROUP BY d.day
+      ORDER BY d.day ASC;
+    `;
+    const { rows: summary } = await pool.query(summarySql, [from, to, user_id ?? null]);
+
+    const detailSql = `
+      SELECT
+        COALESCE(u.full_name, u.email) AS worker_name,
+        (a.marked_at AT TIME ZONE 'America/Lima')::date AS day_date,
+        EXTRACT(DOW FROM (a.marked_at AT TIME ZONE 'America/Lima'))::int AS dow,
+        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS category,
+        COALESCE(a.late_reason_text, '') AS reason
       FROM attendance a
       JOIN users u ON u.id = a.user_id
-      LEFT JOIN qr_windows qw ON qw.token = a.qr_token
-      WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date
-            BETWEEN $1::date AND $2::date
-      ORDER BY 1 ASC, 3 ASC
+      WHERE (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
+        AND a.status = 'tardanza'
+        AND ($3::text IS NULL OR a.user_id = $3::text)
+      ORDER BY day_date ASC, worker_name ASC;
     `;
-    const detail = await pool.query(detailQ, [from, to]);
+    const { rows: details } = await pool.query(detailSql, [from, to, user_id ?? null]);
 
-    // Resumen por categoría (igual que antes)
-    const sumQ = `
-      SELECT
-        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS category,
-        COUNT(*)::int AS count
-      FROM attendance a
-      WHERE a.late_reason_category IS NOT NULL
-        AND (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
-      GROUP BY 1
-      ORDER BY 2 DESC, 1 ASC
-    `;
-    const summary = await pool.query(sumQ, [from, to]);
+    const dias = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+    const esc = (v) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const fmtDMY = (d) =>
+      new Date(d).toLocaleDateString("es-PE", { timeZone: "America/Lima" }); // DD/MM/YYYY
 
-    // NUEVO: bloque de justificaciones completas (solo las que tienen texto)
-    const justQ = `
-      SELECT
-        (a.marked_at AT TIME ZONE 'America/Lima')::date AS date,
-        COALESCE(NULLIF(TRIM(a.late_reason_category), ''), 'Sin razón') AS category,
-        a.late_reason_text AS text
-      FROM attendance a
-      WHERE a.late_reason_text IS NOT NULL AND a.late_reason_text <> ''
-        AND (a.marked_at AT TIME ZONE 'America/Lima')::date BETWEEN $1::date AND $2::date
-      ORDER BY 1 ASC
-    `;
-    const just = await pool.query(justQ, [from, to]);
+    let lines = [];
+    // Encabezado
+    lines.push(`Reporte de Asistencias,${from},${to}${user_id ? `,Usuario:${user_id}` : ""}`);
 
-    const header = [
-      "Fecha",
-      "Hora",
-      "Trabajador",
-      "Estado",
-      "Razón (categoría)",
-      "Justificación (texto)",
-    ];
-
-    const escapeCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-
-    const lines = [header.join(",")];
-
-    // detalle
-    for (const r of detail.rows) {
-      const fecha = new Date(r.date).toLocaleDateString("es-PE", { timeZone: "America/Lima" }); // dd/mm/aaaa
+    // Resumen por día (con fecha DD/MM/YYYY)
+    lines.push("");
+    lines.push("Resumen por día");
+    lines.push("Día,Puntuales,Tardanzas,Faltas");
+    for (const r of summary) {
       lines.push(
         [
-          fecha,
-          r.time || "",
-          escapeCsv(r.worker),
-          r.status,
-          escapeCsv(r.reason_category),
-          escapeCsv(r.reason_text),
+          esc(fmtDMY(r.day)),
+          esc(r.puntuales),
+          esc(r.tardanzas),
+          esc(r.faltas),
         ].join(",")
       );
     }
 
-    // resumen
+    // Justificaciones completas (tardanzas)
     lines.push("");
-    lines.push(`Resumen de razones (${from} a ${to})`);
-    lines.push("Categoría,Conteo");
-    for (const s of summary.rows) {
-      lines.push([escapeCsv(s.category), s.count].join(","));
-    }
-
-    // NUEVO: justificaciones completas al final
-    lines.push("");
-    lines.push(`Justificaciones completas (${from} a ${to})`);
-    lines.push("Fecha,Día,Categoría,Justificación");
-    for (const j of just.rows) {
-      const d = new Date(j.date);
-      const fecha = d.toLocaleDateString("es-PE", { timeZone: "America/Lima" }); // 09/10/2025
-      const dia = new Intl.DateTimeFormat("es-PE", { weekday: "long", timeZone: "America/Lima" })
-        .format(d)
-        .replace(/^\w/, (c) => c.toUpperCase()); // Lunes, Martes...
+    lines.push("Justificaciones (tardanzas)");
+    lines.push("Fecha,Día,Empleado,Categoría,Justificación");
+    for (const d of details) {
+      const fecha = fmtDMY(d.day_date);             // 09/10/2025
+      const dow = dias[d.dow] ?? "";                // Jue
       lines.push(
         [
-          fecha,
-          escapeCsv(dia),
-          escapeCsv(j.category || "Sin razón"),
-          escapeCsv(j.text || ""),
+          esc(fecha),
+          esc(dow),
+          esc(d.worker_name),
+          esc(d.category),
+          esc(d.reason),
         ].join(",")
       );
-      // Si lo quieres en un solo campo tipo: 09/10/2025 Lunes - Tráfico - "texto"
-      // usa en su lugar:
-      // lines.push(escapeCsv(`${fecha} ${dia} - ${j.category || "Sin razón"} - "${(j.text || "").replace(/"/g,'""')}"`));
     }
 
-    const csv = lines.join("\n");
+    const csv = "\uFEFF" + lines.join("\n"); // BOM para Excel/acentos
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    const suffix = user_id ? `_user_${user_id}` : "";
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="asistencia_${from}_a_${to}.csv"`
+      `attachment; filename="asistencia_${from}_a_${to}${suffix}.csv"`
     );
     res.send(csv);
   } catch (err) {
     next(err);
   }
 };
-
