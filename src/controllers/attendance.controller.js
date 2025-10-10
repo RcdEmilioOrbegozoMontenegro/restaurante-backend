@@ -1,56 +1,35 @@
 // src/controllers/attendance.controller.js
+import fs from "node:fs";
+import crypto from "node:crypto";
 import { pool } from "../lib/db.js";
 import { customAlphabet } from "nanoid";
-import { savePhotoBuffer } from "../lib/upload.js";
+// import { savePhotoBuffer } from "../lib/upload.js"; // ⬅️ YA NO SE USA CON diskStorage
 
 const nano = customAlphabet("1234567890abcdefghijklmnopqrstuvwxyz", 24);
 
-/** Clasificación simple de justificación por palabras clave */
 /** Clasifica la justificación en categorías usadas por los gráficos */
 function classifyLateReason(text = "") {
   const t = String(text || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, ""); // sin tildes
+    .replace(/\p{Diacritic}/gu, "");
 
-  // De más específico a más general
   const rules = [
-    {
-      cat: "Tráfico",
-      score: 95,
-      rx: /(trafic|atasc|embotell|congestion|choque|accident|bloque|paraliz|desvio)/,
-    },
-    {
-      cat: "Transporte",
-      score: 92,
-      rx: /(bus|micro|combi|colectivo|metro|tren|mototaxi|taxi|paradero|transporte|vehicul|auto)/,
-    },
-    {
-      cat: "Salud",
-      score: 92,
-      rx: /(salud|medic|doctor|doctora|cita|clinica|hospital|fiebre|dolor|enferm|farmaci|odont|dental|analisis|prueba|psicolog|terapia)/,
-    },
-    {
-      cat: "Documentos",
-      score: 90,
-      rx: /(tramite|tramites|document|dni|reniec|notari|banco|sunat|licencia|certific|constancia|registro|pago)/,
-    },
-    {
-      cat: "Permiso",
-      score: 88,
-      rx: /(permiso|autoriz|me autoriz|licencia laboral)/,
-    },
-    {
-      cat: "Familiar",
-      score: 88,
-      rx: /(hijo|hija|famil|mama|papa|abuela|abuelo|esposa|esposo|pareja|colegi|escuela|jardin|guarderia|velorio|funeral|emergencia familiar)/,
-    },
+    { cat: "Tráfico",     score: 95, rx: /(trafic|atasc|embotell|congestion|choque|accident|bloque|paraliz|desvio)/ },
+    { cat: "Transporte",  score: 92, rx: /(bus|micro|combi|colectivo|metro|tren|mototaxi|taxi|paradero|transporte|vehicul|auto)/ },
+    { cat: "Salud",       score: 92, rx: /(salud|medic|doctor|doctora|cita|clinica|hospital|fiebre|dolor|enferm|farmaci|odont|dental|analisis|prueba|psicolog|terapia)/ },
+    { cat: "Documentos",  score: 90, rx: /(tramite|tramites|document|dni|reniec|notari|banco|sunat|licencia|certific|constancia|registro|pago)/ },
+    { cat: "Permiso",     score: 88, rx: /(permiso|autoriz|me autoriz|licencia laboral)/ },
+    { cat: "Familiar",    score: 88, rx: /(hijo|hija|famil|mama|papa|abuela|abuelo|esposa|esposo|pareja|colegi|escuela|jardin|guarderia|velorio|funeral|emergencia familiar)/ },
   ];
-
   for (const r of rules) if (r.rx.test(t)) return { category: r.cat, score: r.score };
   return { category: "Otros", score: 50 };
 }
 
+function sha256File(absPath) {
+  const buf = fs.readFileSync(absPath);
+  return crypto.createHash("sha256").update(buf).digest("hex");
+}
 
 /** Utilidad: valida QR y expiración; retorna fila de qr_windows o null */
 async function getValidQRWindowOrFail(qrToken) {
@@ -61,14 +40,10 @@ async function getValidQRWindowOrFail(qrToken) {
       LIMIT 1`,
     [qrToken]
   );
-  if (win.rowCount === 0) {
-    return { error: "QR no válido" };
-  }
+  if (win.rowCount === 0) return { error: "QR no válido" };
   const row = win.rows[0];
   const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
-  if (expiresAt && new Date() > expiresAt) {
-    return { error: "QR expirado" };
-  }
+  if (expiresAt && new Date() > expiresAt) return { error: "QR expirado" };
   return { row };
 }
 
@@ -95,12 +70,12 @@ async function willBeLate(qrToken) {
       LIMIT 1`,
     [qrToken]
   );
-  if (!q.rowCount) return null; // token inválido
+  if (!q.rowCount) return null;
   return !!q.rows[0].is_late;
 }
 
 // ---------------------------------------------------------------------------
-// POST /attendance/mark  (requireAuth)  -- SIN FOTO (compatibilidad)
+// POST /attendance/mark  (requireAuth)  -- SIN FOTO (compat)
 // Body: { qrToken, lateReasonText? }
 // ---------------------------------------------------------------------------
 export async function markAttendance(req, res) {
@@ -118,11 +93,9 @@ export async function markAttendance(req, res) {
       return res.status(409).json({ error: "Asistencia ya registrada hoy" });
     }
 
-    // ¿será tardanza?
     const isLate = await willBeLate(qrToken);
     if (isLate === null) return res.status(400).json({ error: "QR no válido" });
 
-    // Si es tardanza, exigir justificación
     let lateReasonCategory = null, lateReasonScore = null;
     if (isLate) {
       if (!lateReasonText || !lateReasonText.trim()) {
@@ -158,9 +131,7 @@ export async function markAttendance(req, res) {
       [id, userId, qrToken, lateReasonText || null, lateReasonCategory, lateReasonScore]
     );
 
-    if (ins.rowCount === 0) {
-      return res.status(400).json({ error: "QR no válido" });
-    }
+    if (!ins.rowCount) return res.status(400).json({ error: "QR no válido" });
 
     return res.json({
       ok: true,
@@ -184,13 +155,13 @@ export async function markAttendance(req, res) {
 export async function markAttendanceWithPhoto(req, res) {
   try {
     const { qrToken, lateReasonText } = req.body || {};
-    const file = req.file; // provisto por multer.single("photo")
+    const file = req.file; // viene de multer.diskStorage (req.file.path y req.file.filename)
 
     if (!qrToken) return res.status(400).json({ error: "qrToken requerido" });
-    if (!file) return res.status(400).json({ error: "Foto requerida" });
+    if (!file)    return res.status(400).json({ error: "Foto requerida" });
 
     const userId = req.user?.sub;
-    if (!userId) return res.status(401).json({ error: "no auth" });
+    if (!userId)  return res.status(401).json({ error: "no auth" });
 
     const valid = await getValidQRWindowOrFail(qrToken);
     if (valid.error) return res.status(400).json({ error: valid.error });
@@ -199,7 +170,6 @@ export async function markAttendanceWithPhoto(req, res) {
       return res.status(409).json({ error: "Asistencia ya registrada hoy" });
     }
 
-    // ¿será tardanza?
     const isLate = await willBeLate(qrToken);
     if (isLate === null) return res.status(400).json({ error: "QR no válido" });
 
@@ -216,16 +186,17 @@ export async function markAttendanceWithPhoto(req, res) {
       lateReasonScore = cls.score;
     }
 
-    // Guardado de foto y hash
-    const ext =
-      file.mimetype === "image/png"
-        ? ".png"
-        : file.mimetype === "image/webp"
-        ? ".webp"
-        : ".jpg"; // default jpeg
-    const { publicUrl, sha256 } = savePhotoBuffer(file.buffer, ext);
+    // multer ya guardó el archivo en /uploads/attendance
+    const publicUrl = `/uploads/attendance/${file.filename}`;
+    let sha256 = "";
+    try {
+      sha256 = sha256File(file.path);
+    } catch (e) {
+      console.error("[attendance] sha256 error:", e);
+      return res.status(500).json({ error: "Fallo procesando la foto" });
+    }
 
-    // (Opcional) Evitar reuso exacto de imagen el mismo día
+    // Evitar reuso de la misma foto el mismo día
     const reuse = await pool.query(
       `SELECT 1
          FROM attendance
@@ -239,7 +210,6 @@ export async function markAttendanceWithPhoto(req, res) {
       return res.status(400).json({ error: "Foto ya utilizada hoy" });
     }
 
-    // Inserción con cálculo de puntual/tardanza + foto + justificación
     const id = nano();
     const ins = await pool.query(
       `
@@ -261,16 +231,10 @@ export async function markAttendanceWithPhoto(req, res) {
        WHERE w.token = $3
       RETURNING marked_at, status, photo_url
       `,
-      [
-        id, userId, qrToken,
-        publicUrl, sha256,
-        lateReasonText || null, lateReasonCategory, lateReasonScore
-      ]
+      [id, userId, qrToken, publicUrl, sha256, lateReasonText || null, lateReasonCategory, lateReasonScore]
     );
 
-    if (ins.rowCount === 0) {
-      return res.status(400).json({ error: "QR no válido" });
-    }
+    if (!ins.rowCount) return res.status(400).json({ error: "QR no válido" });
 
     return res.json({
       ok: true,
@@ -279,16 +243,15 @@ export async function markAttendanceWithPhoto(req, res) {
       status: ins.rows[0].status,
       photoUrl: ins.rows[0].photo_url,
     });
+
   } catch (e) {
-    // índice único por día puede disparar 23505
     if (e && e.code === "23505") {
       return res.status(409).json({ error: "Asistencia ya registrada hoy" });
     }
-    // errores de multer tipo/size llegan como Error normal
     if (e instanceof Error && /Tipo de imagen no permitido|File too large/i.test(e.message)) {
       return res.status(400).json({ error: e.message });
     }
-    console.error(e);
+    console.error("[attendance] mark-with-photo unexpected error:", e);
     return res.status(500).json({ error: "error registrando asistencia con foto" });
   }
 }
